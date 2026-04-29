@@ -25,12 +25,22 @@ wheels/
 .venv/
 venv/
 ENV/
+__pycache__/
+*.py[cod]
 
 # --- Mac 시스템 파일 (팀장님 필수) ---
 .DS_Store
 
 # --- VS Code 설정 (개인 설정 공유 방지) ---
 .vscode/
+.idea/
 
 # --- 환경변수 및 비밀 (보안) ---
 .env
+
+# 데이터 파일 제외
+*.csv
+송원우/data/
+송원우/final_data/
+*.xlsx
+*.zip
