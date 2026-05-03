@@ -1,0 +1,13 @@
+.venv/
+venv/
+__pycache__/
+.DS_Store
+data/
+uv.lock
+*.csv
+*.ipynb
+jinsik/
+김선영/
+김혜수/
+표주하/
+최종자료/
