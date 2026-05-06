@@ -44,3 +44,13 @@ __pycache__/
 송원우/final_data/
 *.xlsx
 *.zip
+*.pkl
+*.h5
+*.bin
+*.parquet
+표주하/data/
+
+# OS 및 에디터 설정
+.DS_Store
+.vscode/
+.idea/
