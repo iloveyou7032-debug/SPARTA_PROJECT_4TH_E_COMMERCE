@@ -18,7 +18,7 @@ import pandas as pd
 from sklearn.metrics import cohen_kappa_score, classification_report
 
 sys.path.insert(0, './송원우')
-import absa
+import 송원우.absa_L1.absa as absa
 importlib.reload(absa)
 
 print(f'absa.py 로드 완료. 속성 수: {len(absa.ASPECTS)}')
