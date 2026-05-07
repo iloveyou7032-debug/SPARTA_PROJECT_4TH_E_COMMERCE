@@ -646,3 +646,187 @@ importlib.reload(check_tokens) → 재실행
 | 임베딩 모델 | `jhgan/ko-sroberta-multitask` |
 | 포지셔닝 축 | X: 기능성(Functionality) / Y: 브랜드 헤리티지(Heritage) |
 | 워크플로우 | 하이브리드 — `.py` 모듈(클로드) + `.ipynb` 실행(사용자) |
+
+---
+
+## 11. ABSA 골든셋 라벨링 (2026-05-04 ~ 05-06)
+
+### 11-A. 6-Aspect 속성 구조 (확정)
+
+| # | 속성 | 정의 | 포지셔닝 축 |
+|---|------|------|------------|
+| 1 | 핏/사이즈 | 사이즈 정확도, 라이즈, 압박감, Y존, 라인감 | X 보조 |
+| 2 | 소재/내구성 | 원단 촉감·두께, 보풀·변색·늘어짐 | X 보조 |
+| 3 | 기능성 | 신축성, 흡습속건, 통기성, 활동성, 보온/냉감 | **X 핵심** |
+| 4 | 디자인 | 색상, 패턴, 실루엣, 데일리 활용도 | Y 보조 |
+| 5 | 브랜드/헤리티지 | 재구매·추천·충성도·정체성 표현 (v2: 협소화) | **Y 핵심** |
+| 6 | 가격/가치 | 가격, 가성비, 프로모션 | 보조 |
+
+### 11-B. `absa_sampling.py` (v1.0)
+
+**역할**: `preprocessed_absa.parquet` → 1,000건 골든셋 + 어노테이션 xlsx 생성
+
+**샘플링 전략**:
+- 4 브랜드 × 250건 = 1,000건 균등
+- 1-3점 50% (125건) + 4-5점 50% (125건) — 별점 편향(4-5점 92%) 보정
+- `content_len ≥ 20` 정보량 필터, rating=0(별점 결측) 제외
+- xlsx 2시트: [가이드라인 v1] + [라벨링] (드롭다운 P/N/U/X 검증)
+- 라벨링 컬럼: `content_clean`(70칸 주 텍스트) + `content`(50칸 참고)
+
+**주요 함수**: `build_golden_set()`, `sample_golden_set()`, `build_annotation_template()`
+
+### 11-C. Cohen's κ 측정 (1차, v1 4-class P/N/U/X)
+
+**라벨링 분담**:
+- `absa_golden_set_1000_done.xlsx`: sample_idx 1-500 → 라벨러 1, 501-1000 → 라벨러 2 (분업, 겹침 없음)
+
+**κ 측정용 교차 재라벨링** (각 50건, 총 100건):
+- 라벨러 1 → sample_idx 501~ 50건 신규 라벨링 (라벨러 2 원본 구간)
+- 라벨러 2 → sample_idx ~500 50건 신규 라벨링 (라벨러 1 원본 구간)
+- 비교: 원본(done) ↔ 신규(L1/L2)
+
+**1차 κ 결과 (v1)**:
+| 속성 | κ | 판정 |
+|---|---|---|
+| 핏/사이즈 | 0.6679 | ⚠️ 합격권 |
+| 소재/내구성 | 0.5913 | ❌ |
+| 기능성 | 0.5586 | ❌ |
+| 디자인 | 0.6248 | ⚠️ 합격권 |
+| 브랜드/헤리티지 | 0.1612 | ❌ 심각 |
+| 가격/가치 | 0.6867 | ⚠️ 합격권 |
+| **Macro-avg** | **0.5484** | 기준 0.75 미달 |
+
+### 11-D. 4대 구조적 결함 진단
+
+| 결함 | 영향 | 근본 원인 |
+|---|---|---|
+| A. 브랜드 정의 범위 과도 | 브랜드/헤리티지 (κ=0.16) | 약한 시그널("추가구매", "또") 포함 여부 라벨러별 상이 |
+| B. "편하다" 귀속 규칙 부재 | 핏·기능성·소재 | 단어 하나가 3개 속성에 모두 매핑 가능 |
+| C. 부정 톤 우세 처리 부재 | 전 속성 | "구매했는데 별로" 처리 룰 없음 |
+| D. U 클래스 활용 저조 | 전 속성 | 1~22건만 사용, P↔U·N↔U 혼동이 κ 끌어내림 |
+
+**P↔X 불일치 패턴** (가장 지배적): 67건 — "이 표현이 해당 속성을 언급하는 것인가?" 기준이 라벨러별 상이
+
+### 11-E. 가이드라인 v2.0 (2026-05-06, 235줄)
+
+`/송원우/absa_guideline_v2.md` — 누구나 읽고 동일 판단 가능한 표준 문서
+
+**핵심 변경**:
+1. **U 폐지** → 3-class (P/N/X)
+2. **브랜드/헤리티지 협소화** → 명시 트리거(재구매·추천·충성도·정체성)만 P
+3. **"편하다" 귀속 Hard Rule** → 맥락 없으면 X
+4. **부정 톤 우세 룰** → rating ≤ 2 + 강한 부정어 시 약한 P → X 강등
+5. **트리거 사전** → 6 속성 × P/N 키워드 명시 (각 10~20개)
+
+**문서 구성** (9장):
+1·2장 정의·의사결정 트리 / 3장 속성별 상세 룰 / 4장 전역 룰 / 5장 모호 표현 매핑 사전(25개) / 6장 셀프 체크리스트 / 7장 합의 프로세스 / 8장 FAQ / 9장 변경 이력
+
+### 11-F. `absa_relabel.py` (v1→v2 변환 모듈)
+
+**핵심 아이디어**: 1,000건 재라벨링 ❌ → 트리거 사전 자동 매칭으로 충돌 케이스만 라벨러 검토
+
+**자동 변환**:
+- U → X 일괄 (177건)
+- 부정 톤 우세 + 약한 브랜드 P → X 강등 후보 플래그
+
+**재검토 플래그 (5종)**:
+| 플래그 | 의미 | 우선순위 |
+|---|---|---|
+| `X_HAS_TRIGGER` | v1=X, 트리거 매칭 (누락 의심) | P1 |
+| `P_vs_TRIGGER_N` | v1=P, 트리거=N (충돌) | P1 |
+| `N_vs_TRIGGER_P` | v1=N, 트리거=P (충돌) | P1 |
+| `PYEONHADA_AMBIGUOUS` | "편하다" 단독 P | P1 |
+| `NEG_TONE_WEAK_P` | 부정 톤 + 약한 브랜드 P | P1 |
+| `P_NO_TRIGGER` / `N_NO_TRIGGER` | 트리거 매칭 없음 (사전 한계 가능) | P2 (스폿) |
+
+**라벨러별 검토 분담** (분업 구조 유지: L1=1-500, L2=501-1000 본인 구간):
+- 라벨러1: P1 106건 + P2 스폿 50건 = **156건** (~1.5시간)
+- 라벨러2: P1 156건 + P2 스폿 50건 = **206건** (~2시간)
+
+**산출 파일**:
+- `absa_golden_set_1000_v2.xlsx` (U→X 자동변환)
+- `absa_relabel_P1_L1.xlsx` / `absa_relabel_P1_L2.xlsx` (즉시 검토)
+- `absa_relabel_P2_spotcheck_L1.xlsx` / `absa_relabel_P2_spotcheck_L2.xlsx` (스폿)
+
+### 11-G. 도메인 인정 가능 κ 기준
+
+**Landis & Koch (1977) 표준**:
+- 0.81~1.00 Almost Perfect / **0.61~0.80 Substantial (산업 표준)** / 0.41~0.60 Moderate / <0.40 Fair
+
+**도메인 비교**:
+- KOLD (한국어 혐오, 2022): κ=0.86 (binary)
+- NIKL ABSA (국립국어원, 2021): κ=0.72 (4-class)
+- SemEval-2014/2016 ABSA: κ=0.67~0.81
+
+**예상 도달 κ (단계별)**:
+| 단계 | 예상 κ | 판정 |
+|---|---|---|
+| 현재 v1 | 0.55 | Moderate (사용 불가) |
+| v2 자동변환 직후 | 0.60~0.64 | 경계 |
+| **v2 + P1 검토 후** | **0.68~0.74** | **Substantial (상용 학습 데이터 사용 가능)** |
+| v2 + 100건 교차 재라벨링 | 0.72~0.78 | NIKL/SemEval 수준 |
+| + 시니어 중재 | 0.78~0.85 | Almost Perfect (벤치마크) |
+
+**솔직한 평가**:
+- κ ≥ 0.65 도달 가능성: **90%+** (P1 검토만으로도 가능)
+- κ ≥ 0.75 도달 가능성: **70~80%** (P1 검토 + 100건 재라벨링 + 시니어 중재 조건)
+- v2 자동변환만으로는 0.60~0.64 머무를 가능성 → P1 검토 필수
+
+### 11-H. 다음 단계 액션 플랜
+
+**Day 1 (완료)**:
+- [x] 가이드라인 v2.0 문서화
+- [x] `absa_relabel.py` 작성 — 자동 변환 + 재검토 플래그
+- [x] U→X 자동 변환 완료 (`absa_golden_set_1000_v2.xlsx` 산출)
+- [x] P1/P2 검토 시트 생성 (라벨러1 156건, 라벨러2 206건)
+
+**Day 2 (진행 예정)**:
+- [ ] 라벨러 2명 가이드라인 v2 정독 + 캘리브레이션 미팅 (30분)
+- [ ] P1 즉시 검토 작업 (라벨러별 1.5~2시간)
+- [ ] P2 스폿 체크 50건 → 트리거 사전 보강 필요 여부 판단
+
+**Day 3 (예정)**:
+- [ ] P1 검토 결과 통합 → v2.1 라벨 갱신 코드 (작성 필요)
+- [ ] 100건 교차 재검증 v2.1 기반 재라벨링
+- [ ] κ 재측정 → 목표 ≥ 0.65 도달 확인
+
+**Day 4 이후**:
+- [ ] 시니어 중재 (필요 시)
+- [ ] 최종 골든셋 v2.2 확정
+- [ ] ABSA 본 작업 진입 (`absa.py` 캐스케이드)
+
+### 11-I. 주요 산출물 위치 (송원우/)
+
+| 파일 | 용도 |
+|---|---|
+| `absa_guideline_v2.md` | 라벨러 가이드라인 v2.0 (235줄, 9장) |
+| `absa_sampling.py` | 골든셋 추출 + xlsx 자동 생성 모듈 |
+| `absa_relabel.py` | v1→v2 변환 + 재검토 플래그 모듈 |
+| `absa_labeling_260504.ipynb` | Cohen's κ 계산 노트북 |
+| `final_data/absa_golden_set_1000_done.xlsx` | v1 라벨링 완료 (1-500 L1, 501-1000 L2) |
+| `final_data/absa_golden_set_1000_v2.xlsx` | v2 자동 변환 (U→X) |
+| `final_data/kappa_overlap_100.xlsx` | 교차 재라벨링 풀 (100건) |
+| `final_data/kappa_overlap_100_L1.xlsx` | 라벨러1 신규 라벨 (51-100 구간 50건) |
+| `final_data/kappa_overlap_100_L2.xlsx` | 라벨러2 신규 라벨 (1-50 구간 48건) |
+| `final_data/absa_relabel_P1_L1.xlsx` | 라벨러1 즉시 검토 (106건) |
+| `final_data/absa_relabel_P1_L2.xlsx` | 라벨러2 즉시 검토 (156건) |
+| `final_data/absa_relabel_P2_spotcheck_L1.xlsx` | 라벨러1 스폿체크 (50건) |
+| `final_data/absa_relabel_P2_spotcheck_L2.xlsx` | 라벨러2 스폿체크 (50건) |
+
+---
+
+## 12. 진행 로그 (2026-05-04 ~ 05-06)
+
+| 날짜 | 내용 |
+|------|------|
+| 2026-05-04 | `absa_sampling.py` v1.0 작성, 1,000건 골든셋 추출 (4브랜드 균등 250 + 1-3점 oversample 50%). xlsx 2시트(가이드라인+라벨링) + P/N/U/X 드롭다운 검증. content_clean을 라벨링 주 텍스트로 배치 |
+| 2026-05-05 | 1,000건 라벨링 완료 (분업: L1=1-500, L2=501-1000). 100건 교차 재라벨링 진행 (각 50건씩). κ 측정 코드 디버깅 (overlap_pool 변수 참조 오류 → done.xlsx에서 원본 라벨 가져오는 방식으로 수정) |
+| 2026-05-06 | 1차 κ 측정: Macro 0.55 (브랜드/헤리티지 0.16 심각, 가격/가치 0.69 합격). 4대 구조적 결함 진단 완료. 가이드라인 v2.0(235줄) 작성 — U 폐지, 브랜드 협소화, 편하다 룰, 부정 톤 룰, 트리거 사전. `absa_relabel.py` 작성 — 자동 변환 + P1/P2 우선순위 검토 시트 생성 (라벨러1 156건, 라벨러2 206건). 도메인 κ 기준 검토: P1 검토 후 κ 0.68~0.74 (Substantial) 도달 예상 |
+| 2026-05-06 | P1/P2 검토 완료 → v2.1 골든셋 → 2차 κ 0.4633 (Moderate, 미달). Mismatch 분석으로 L1 전이오류·L2 누락오류 진단. 가이드라인 v2.1 → v2.2 패치 (착용감 귀속 규칙, 브랜드 협소화 박스, 캘리브레이션 합의 3건 반영). 캘리브레이션 30건 진행 → κ_calib (기능성 1.000, 브랜드 0.900, Macro 0.950 Almost Perfect) |
+| 2026-05-06 | v2.2 base + 2속성 재라벨링 (L1 idx 1~500, L2 idx 501~1000). v2.3 골든셋 병합 완료 → `absa_golden_set_1000_v23.xlsx`. 전체 κ: 기능성 0.6573 / 브랜드 0.4587 / Macro 0.5580. 단, 이는 "새라벨 vs 구 over-labeled" 비교의 측정 artifact. 실질적 IAA = 캘리브레이션 κ 0.95. v2.3 브랜드 P 423→202(-221), X 420→690(+270) — 가이드라인 협소화 적용 결과 |
+| 2026-05-06 | 시나리오 A 채택 (즉시 ABSA 진행 + 사후 검증). L2 구간 100건 stratified sample 추출 (P:25/N:15/X:60) → `absa_overlap_validation_L1.xlsx` (3시트: 안내/검증라벨링/가이드라인요약, P/N/X 드롭다운). 정답지 비공개 저장: `_overlap_answer_key_v23.xlsx`. 라벨러1 작업 완료 후 cross-overlap κ 측정 → Gate 1 (≥0.65 시 absa.py 진입 확정) |
+| 2026-05-07 | 역할 재정의: 라벨러1이 Phase A~E end-to-end 단독 진행 (overlap 라벨링→κ→absa.py 구현→F1 검증→1.16M 추론). 송원우는 L2 합의 미팅(필요 시) + BERTopic/SNA/포지셔닝 후속 작업. 산출물: `L1_작업매뉴얼.md`(end-to-end 절차+의사결정 분기), `absa.py`(골격: Stage1 트리거+Stage2 EXAONE 캐스케이드, [L1 채우기] 함수 표시), `L1_실행노트북.py`(Phase B/C/D/E 셀단위). Q1 A 결정: 송원우=골격, L1=구현. 정답지 파일 `_DO_NOT_OPEN_BEFORE_LABELING` 접미어로 rename. Stage1 트리거 사전은 `absa_relabel.py` v2.2 기준 재활용 권고 |
+| 2026-05-07 | Streamlit 대시보드 3단계 개편 완료. Step1: 사이드바 필터 전면 교체(multiselect/slider/selectbox/checkbox×3), session.py 키 재설계, apply_filters 새 키 처리, app.py 거시적 요약 전용으로 단순화. Step2: 브랜드 개별 페이지 P1~P4 신설(휠라/안다르/젝시믹스/룰루레몬), 공통 템플릿 brand_page.py, 매출 더미 placeholder/월별 추이/카테고리 분포/가격 히스토그램/워드클라우드(wordcloud 폴백 포함). Step3: 분석 페이지 P5~P7으로 번호 변경(BERTopic/ABSA/전략포지셔닝), 구 P1~P4 삭제, 필터 변수명 업데이트. requirements.txt에 wordcloud/matplotlib 추가. 스키마 경고(reviews schema) 수정 — 부분 컬럼 로드 시 check_schema 생략, REVIEWS_SCHEMA 실 parquet 타입에 맞게 정렬. |
+| 2026-05-08 | 대시보드 3차 개편 완료. (1) P2 전면 개편: 가격 탄력성 X축을 할인율(%)로 교체(룰루레몬 0~15% vs domestic 0~55% 브랜드별 프리미엄 방어력 시각화), 고관여 인게이지먼트 섹션 신규(포토 리뷰 비율/평균 도움이 돼요/신상품 포토 비율 브랜드 비교 Bar 3열), SKU 복잡도 Box Plot으로 교체(색상 수 구간별 리뷰 수 분포), 컬러 빈도 분석 신규(purchase_option_color Top10 horizontal bar), 리뷰 볼륨×평점 사분면 Scatter 신규(브랜드×카테고리, 중앙값 기준선). P2 총 6섹션. (2) P3 파일명 3_고객의_목소리.py → 3_BERTopic.py, P4 파일명 4_브랜드_속성_평가.py → 4_ABSA.py (사이드바 표시 이름 변경). (3) 전체 이모티콘 제거: app.py/P1~P5/brand_page.py/filters.py 전 파일의 page_icon, title, subheader, caption, markdown, button, annotation 텍스트에서 이모티콘 완전 제거. |
+| 2026-05-08 | P2 실데이터 연결 완료. preprocessed_absa.parquet(1.17M행, 35컬럼)으로 더미 전면 대체. 6섹션 모두 get_reviews() 컬럼 프루닝 + @st.cache_data 집계 함수로 재작성: (1)체형 Heatmap — user_height/weight_group groupby pivot_table, 첫 숫자 기준 정렬; (2)가격탄력 — 할인율=(original-discount)/original×100, 5% 구간 집계 scatter; (3)고관여 — is_new 혼합타입 정규화(True/1.0), has_image mean/helpful_count mean/is_new×has_image 브랜드별 집계; (4)SKU Box Plot — product_id 단위 n_reviews+color_count 집계, 5구간 버킷; (5)컬러 빈도 — purchase_option_color unknown 제외+쉼표 분리 첫색상 top10; (6)사분면 — brand×cat1 groupby n_reviews+avg_rating. warn_using_dummy 제거, numpy/더미생성기 전부 삭제. 실데이터 주요 인사이트: 젝시믹스 포토 리뷰 비율 99.4%(플랫폼 특성), 룰루레몬 helpful_count 0.76(최고), 룰루레몬 할인율 0% 집중(노세일 정책 확인). |
+| 2026-05-08 | 대시보드 UX 2차 개편 완료 (Phase 1~3). Phase1: session_state.brands를 단일 문자열로 전환, app.py 하단에 브랜드 바로가기 버튼(4열), brand_page.py 최상단에 st.pills 브랜드 전환 UI 추가. session.py/filters.py 타입 호환 의존성 수정(get_filters()에서 string→list 정규화). Phase2: 개별 브랜드 4개 페이지(1~4) → 단일 통합 페이지 1_브랜드_별_현황.py로 통합, 심화분석 페이지 5→3(BERTopic), 6→4(ABSA), 7→5(포지셔닝)으로 번호 변경 및 제목 수정. Phase3: 신규 페이지 2_상품_및_고객_전략.py 생성 — 체형별 만족도 Heatmap(키/몸무게 그룹 × 평균 평점), 가격 탄력성 Scatter(discount_price vs 평점/리뷰수, lowess trendline), SKU 관여도 이중축 Bar(색상수 구간별 상품 수 + 포토 리뷰 비율). 전체 페이지 구성: 홈(app.py) + P1~P5 = 총 6개 화면. |

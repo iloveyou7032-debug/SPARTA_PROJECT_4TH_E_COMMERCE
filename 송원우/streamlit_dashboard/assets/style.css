@@ -1,0 +1,53 @@
+/* C-Level 대시보드 커스텀 스타일 */
+
+/* 폰트 */
+html, body, [class*="css"] {
+    font-family: -apple-system, BlinkMacSystemFont, "Pretendard", "Segoe UI", sans-serif;
+}
+
+/* 메트릭 카드 가독성 */
+[data-testid="stMetricValue"] {
+    font-size: 28px;
+    font-weight: 700;
+}
+[data-testid="stMetricLabel"] {
+    font-size: 12px;
+    color: #888 !important;
+}
+
+/* 사이드바 */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0a0e1a 0%, #14182a 100%);
+    border-right: 1px solid #2a2a3e;
+}
+
+/* 버튼 */
+.stButton > button {
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+.stButton > button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(255, 215, 0, 0.2);
+}
+
+/* 페이지 네비 */
+[data-testid="stSidebarNav"] li a {
+    border-left: 3px solid transparent;
+    transition: all 0.2s;
+}
+[data-testid="stSidebarNav"] li a:hover {
+    border-left-color: #FFD700;
+    background: rgba(255, 215, 0, 0.05);
+}
+
+/* 데이터프레임 */
+[data-testid="stDataFrame"] {
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+/* 알림 박스 */
+[data-baseweb="notification"] {
+    border-radius: 6px;
+}
