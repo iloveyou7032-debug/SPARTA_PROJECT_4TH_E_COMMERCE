@@ -34,6 +34,7 @@ from utils.data_contracts import (
     ABSA_SCHEMA, POSITIONING_SCHEMA, SNA_SCHEMA,
     check_schema,
 )
+from utils.exceptions import warn_using_dummy
 
 logger = logging.getLogger(__name__)
 
@@ -76,24 +77,118 @@ def get_topics() -> pd.DataFrame:
     return _load_or_dummy(PATHS["topics"], TOPICS_SCHEMA, "topics", _generate_dummy_topics)
 
 
+@st.cache_data(ttl=CACHE_TTL, show_spinner="토큰 데이터 로드 중...")
+def get_tokens(brand: str | None = None,
+               column: str = "tokens_topic") -> pd.DataFrame:
+    """형태소 분석(사용자·불용·정규화 사전 적용) 토큰 로드.
+
+    - 워드클라우드 등 어휘 빈도 분석에 사용.
+    - PATHS["tokens"] 미존재 시 PATHS["reviews"] 의 'tokens' 컬럼으로 폴백.
+
+    Args:
+        brand: 특정 브랜드만 로드. None=전체.
+        column: 'tokens_topic'(BERTopic용 — stopword/길이 필터 강함) 또는 'tokens'.
+    """
+    path = PATHS.get("tokens", PATHS["reviews"])
+    if not path.exists():
+        path = PATHS["reviews"]
+    if not path.exists():
+        return pd.DataFrame(columns=["brand", column])
+
+    cols = ["brand", column]
+    df = pd.read_parquet(path, columns=cols)
+    if brand is not None:
+        df = df[df["brand"] == brand]
+    return df
+
+
 @st.cache_data(ttl=CACHE_TTL)
 def get_topic_meta() -> pd.DataFrame:
     """토픽 메타(topic_id별 1행). topics에서 파생."""
     topics = get_topics()
+
     if topics.empty:
         return pd.DataFrame(columns=list(TOPIC_META_SCHEMA.keys()))
-    meta = (topics
-            .groupby("topic_id", as_index=False)
-            .agg(topic_name=("topic_name", "first"),
-                 n_reviews=("review_id", "count"),
-                 keywords=("topic_keywords", "first")))
+
+    # BERTopic 실 산출물은 'Topic' (대문자) 컬럼을 사용할 수 있음
+    if "topic_id" not in topics.columns and "Topic" in topics.columns:
+        topics = topics.rename(columns={"Topic": "topic_id"})
+
+    if "topic_id" not in topics.columns:
+        warn_using_dummy("토픽 메타데이터 (컬럼 누락)")
+        rng = np.random.default_rng(DUMMY_SEED + 10)
+        dummy_topics = [
+            ("쿠셔닝/착용감", ["쿠션", "폭신", "착용감", "안정감"]),
+            ("핏/보정",       ["핏", "사이즈", "라인", "보정"]),
+            ("디자인/색감",   ["디자인", "색상", "컬러", "패턴"]),
+            ("소재/촉감",     ["소재", "촉감", "원단", "신축성"]),
+            ("재구매/추천",   ["재구매", "추천", "단골", "믿고"]),
+        ]
+        return pd.DataFrame([
+            {
+                "topic_id":   i,
+                "topic_name": name,
+                "n_reviews":  int(rng.integers(500, 5000)),
+                "keywords":   kws,
+                "axis_hint":  _axis_hint_for_topic(name),
+                "representative_doc": "",
+            }
+            for i, (name, kws) in enumerate(dummy_topics)
+        ])
+
+    agg_kwargs: dict = {"topic_name": ("topic_name", "first")} if "topic_name" in topics.columns else {}
+    id_col = "review_id" if "review_id" in topics.columns else topics.columns[0]
+    agg_kwargs["n_reviews"] = (id_col, "count")
+    if "topic_keywords" in topics.columns:
+        agg_kwargs["keywords"] = ("topic_keywords", "first")
+
+    meta = topics.groupby("topic_id", as_index=False).agg(**agg_kwargs)
+
+    if "topic_name" not in meta.columns:
+        meta["topic_name"] = meta["topic_id"].astype(str)
+    if "keywords" not in meta.columns:
+        meta["keywords"] = [[] for _ in range(len(meta))]
+
     meta["axis_hint"] = meta["topic_name"].apply(_axis_hint_for_topic)
-    meta["representative_doc"] = ""  # 실데이터에서는 모델팀이 채움
+    meta["representative_doc"] = ""
     return meta
 
 
 @st.cache_data(ttl=CACHE_TTL)
 def get_absa() -> pd.DataFrame:
+    """ABSA 감성 분석 결과 로드.
+
+    우선순위:
+      1. 라벨러1 + 송원우 complement 둘 다 있으면 → concat + drop_duplicates("review_id")
+      2. 하나만 있으면 → 해당 파일 단독 사용
+      3. 둘 다 없으면 → 기존 absa_predictions_full.parquet 폴백
+      4. 모두 없으면 → 더미
+    """
+    path_l1   = PATHS.get("absa_labeler1")
+    path_comp = PATHS.get("absa_complement")
+    has_l1    = path_l1 is not None and path_l1.exists()
+    has_comp  = path_comp is not None and path_comp.exists()
+
+    if has_l1 and has_comp:
+        l1   = pd.read_parquet(path_l1)
+        comp = pd.read_parquet(path_comp)
+        merged = (
+            pd.concat([l1, comp], ignore_index=True)
+            .drop_duplicates("review_id")
+        )
+        result = check_schema(merged, ABSA_SCHEMA, "absa (merged)")
+        if result.missing:
+            logger.warning(result.summary())
+        logger.info(f"[ABSA] merged: l1={len(l1):,} + complement={len(comp):,} → {len(merged):,}")
+        return merged
+
+    if has_l1:
+        return _load_or_dummy(path_l1, ABSA_SCHEMA, "absa (labeler1)", _generate_dummy_absa)
+
+    if has_comp:
+        return _load_or_dummy(path_comp, ABSA_SCHEMA, "absa (complement)", _generate_dummy_absa)
+
+    # 기존 단일 파일 폴백 (하위 호환)
     return _load_or_dummy(PATHS["absa"], ABSA_SCHEMA, "absa", _generate_dummy_absa)
 
 
@@ -104,8 +199,10 @@ def get_positioning() -> pd.DataFrame:
     if path.exists():
         df = pd.read_parquet(path)
         result = check_schema(df, POSITIONING_SCHEMA, "positioning")
-        if not result.ok:
+        if result.missing:
             logger.warning(result.summary())
+            warn_using_dummy(f"포지셔닝 좌표 (스키마 불일치 — 누락 컬럼: {result.missing})")
+            return compute_positioning_from_absa()
         return df
     # 폴백: absa + reviews 조합으로 즉시 산출
     return compute_positioning_from_absa()
@@ -175,26 +272,35 @@ def compute_aspect_polarity(filters_hash: str = "") -> pd.DataFrame:
 def compute_positioning_from_absa() -> pd.DataFrame:
     """ABSA → 브랜드 좌표 즉석 산출 (positioning_scores 부재 시 폴백).
 
-    공식 (단순):
-      x_function = (P_func - N_func) / (P + N + ε)  → [0,1] minmax
-      y_heritage = (P_brand - N_brand) / (P + N + ε) → [0,1] minmax
+    좌표 산출 공식:
+      polarity_score = (P_ratio - N_ratio) / (P_ratio + N_ratio + ε)   ∈ [-1, 1]
+      x_function     = 0.5 * (1 + functionality_score)                 ∈ [0, 1]
+      y_heritage     = 0.5 * (1 + brand_heritage_score)                ∈ [0, 1]
+
+    설계 노트:
+    - minmax 정규화는 4브랜드 비교에서 항상 한 브랜드를 0, 한 브랜드를 1로
+      찍는 부작용이 있어, 절대 스케일 (P-N)/(P+N) → [0,1] 선형 변환을
+      사용한다. 0.5 = 중립(P=N), 1.0 = 전 긍정, 0.0 = 전 부정.
+    - 해당 속성에서 ABSA 결과가 없는 브랜드는 NaN을 유지한다(0으로 채우면
+      좌하단으로 잘못 시각화됨).
     """
     pol = compute_aspect_polarity()
     if pol.empty:
         return pd.DataFrame()
 
-    func = pol[pol["aspect"] == "functionality"].set_index("brand")
+    func  = pol[pol["aspect"] == "functionality"].set_index("brand")
     brand = pol[pol["aspect"] == "brand_heritage"].set_index("brand")
 
     out = pd.DataFrame(index=BRAND_ORDER)
     eps = 1e-9
-    out["x_function_raw"] = (func["P_ratio"] - func["N_ratio"]) / (func["P_ratio"] + func["N_ratio"] + eps)
-    out["y_heritage_raw"] = (brand["P_ratio"] - brand["N_ratio"]) / (brand["P_ratio"] + brand["N_ratio"] + eps)
+    fn_score = (func["P_ratio"] - func["N_ratio"]) / (func["P_ratio"] + func["N_ratio"] + eps)
+    bh_score = (brand["P_ratio"] - brand["N_ratio"]) / (brand["P_ratio"] + brand["N_ratio"] + eps)
 
-    # 0~1 정규화 (4점 brand 비교용 minmax)
-    for col in ["x_function_raw", "y_heritage_raw"]:
-        s = out[col]
-        out[col.replace("_raw", "")] = (s - s.min()) / (s.max() - s.min() + eps)
+    # 절대 스케일 [-1,1] → [0,1] 선형 변환 (minmax 부작용 회피)
+    out["x_function"] = 0.5 * (1 + fn_score)
+    out["y_heritage"] = 0.5 * (1 + bh_score)
+
+    # 신뢰구간 ±0.05 (NaN은 NaN으로 자연 전파)
     out["x_function_ci_low"]  = out["x_function"] - 0.05
     out["x_function_ci_high"] = out["x_function"] + 0.05
     out["y_heritage_ci_low"]  = out["y_heritage"] - 0.05
@@ -216,8 +322,10 @@ def _load_or_dummy(path: Path, schema: dict, name: str, dummy_fn) -> pd.DataFram
     if path.exists():
         df = pd.read_parquet(path)
         result = check_schema(df, schema, name)
-        if not result.ok:
+        if result.missing:
             logger.warning(result.summary())
+            warn_using_dummy(f"{name} (스키마 불일치 — 누락 컬럼: {result.missing})")
+            return dummy_fn()
         return df
     logger.info(f"[DUMMY] {path.name} 미발견 → 더미 생성")
     return dummy_fn()
@@ -236,14 +344,14 @@ def _generate_dummy_reviews(n: int) -> pd.DataFrame:
         "cat2":      rng.choice(sizes, n),
         "cat3":      "",
         "gender":    rng.choice(genders, n),
-        "rating":    rng.choice([1, 2, 3, 4, 5], n, p=[0.03, 0.04, 0.08, 0.25, 0.60]).astype("Int8"),
+        "rating":    pd.array(rng.choice([1, 2, 3, 4, 5], n, p=[0.03, 0.04, 0.08, 0.25, 0.60]), dtype="Int8"),
         "review_date": pd.to_datetime("2024-01-01") + pd.to_timedelta(rng.integers(0, 800, n), unit="D"),
     })
     df["year"]  = df["review_date"].dt.year.astype("Int16")
     df["month"] = df["review_date"].dt.month.astype("Int8")
     df["content"]       = "[더미] 리뷰 본문"
     df["content_clean"] = "[더미] 정제 본문"
-    df["content_len"]   = rng.integers(10, 200, n).astype("Int32")
+    df["content_len"]   = pd.array(rng.integers(10, 200, n), dtype="Int32")
     df["tokens"]        = [["더미","토큰"] for _ in range(n)]
     df["tokens_topic"]  = [["더미","토픽"] for _ in range(n)]
     return df
@@ -270,7 +378,7 @@ def _generate_dummy_topics() -> pd.DataFrame:
     tids = rng.integers(0, len(topic_pool), n)
     df = pd.DataFrame({
         "review_id": rev["review_id"].values,
-        "topic_id":  tids.astype("Int16"),
+        "topic_id":  pd.array(tids, dtype="Int16"),
         "topic_name": [topic_pool[t][0] for t in tids],
         "topic_label_auto": [f"topic_{t}" for t in tids],
         "topic_keywords":   [topic_pool[t][1] for t in tids],

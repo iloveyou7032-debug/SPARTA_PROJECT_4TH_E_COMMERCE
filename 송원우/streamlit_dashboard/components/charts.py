@@ -98,22 +98,31 @@ def aspect_polarity_diverging_bar(polarity_df: pd.DataFrame, brand: str) -> go.F
 
 
 def topic_keyword_treemap(topic_meta: pd.DataFrame) -> go.Figure:
-    """토픽 × n_reviews 트리맵."""
+    """토픽 × n_reviews 트리맵 (라벨에 비율 표시)."""
     if topic_meta.empty:
         return _empty_fig("토픽 메타 없음")
     df = topic_meta[topic_meta["topic_id"] >= 0].copy()
     df["keywords_str"] = df["keywords"].apply(lambda kws: ", ".join(kws[:6]))
+    total = df["n_reviews"].sum() or 1
+    df["share"] = df["n_reviews"] / total
     fig = px.treemap(
         df,
         path=["topic_name"],
         values="n_reviews",
         color="n_reviews",
         color_continuous_scale="Tealgrn",
-        custom_data=["keywords_str"],
+        custom_data=["keywords_str", "share"],
         title="토픽 점유율",
     )
     fig.update_traces(
-        hovertemplate="<b>%{label}</b><br>리뷰 %{value:,}건<br>키워드: %{customdata[0]}<extra></extra>",
+        texttemplate="<b>%{label}</b><br>%{customdata[1]:.1%} (%{value:,}건)",
+        textposition="middle center",
+        textfont_size=13,
+        hovertemplate=(
+            "<b>%{label}</b><br>"
+            "리뷰 %{value:,}건 (%{customdata[1]:.1%})<br>"
+            "키워드: %{customdata[0]}<extra></extra>"
+        ),
     )
     fig.update_layout(height=480)
     return fig

@@ -51,11 +51,16 @@ def render_positioning_map(
         _add_quadrants(fig)
 
     # ── 2. 브랜드별 신뢰구간 → 산점 ─────────────────────────
+    skipped_brands: list[str] = []
     for _, row in pos_df.iterrows():
         brand = row["brand"]
         if brand not in BRANDS:
             continue
         meta = BRANDS[brand]
+        # 좌표 결측치는 좌하단으로 그리지 않고 스킵 (전략 오해 방지)
+        if pd.isna(row["x_function"]) or pd.isna(row["y_heritage"]):
+            skipped_brands.append(meta["label"])
+            continue
         x, y = float(row["x_function"]), float(row["y_heritage"])
 
         # 신뢰구간 (가로/세로 막대)
@@ -103,7 +108,7 @@ def render_positioning_map(
     # ── 3. 휠라 권장 이동 화살표 ────────────────────────────
     if target_position is not None:
         fila_row = pos_df[pos_df["brand"] == "FILA"]
-        if not fila_row.empty:
+        if not fila_row.empty and pd.notna(fila_row["x_function"].iloc[0]) and pd.notna(fila_row["y_heritage"].iloc[0]):
             fx, fy = float(fila_row["x_function"].iloc[0]), float(fila_row["y_heritage"].iloc[0])
             tx, ty = target_position
             fig.add_annotation(
@@ -119,6 +124,15 @@ def render_positioning_map(
                 name="권장 위치", showlegend=True,
                 hovertemplate="<b>휠라 권장 포지셔닝</b><br>x=%{x:.2f}, y=%{y:.2f}<extra></extra>",
             ))
+
+    # ── 3.5. 산출 불가 브랜드 안내 ────────────────────────────
+    if skipped_brands:
+        fig.add_annotation(
+            text=f"⚠ 산출 불가 (NA): {', '.join(skipped_brands)}",
+            xref="paper", yref="paper", x=0.99, y=1.06,
+            showarrow=False, font=dict(size=11, color="#FF9800"),
+            xanchor="right",
+        )
 
     # ── 4. 레이아웃 ────────────────────────────────────────
     fig.update_layout(

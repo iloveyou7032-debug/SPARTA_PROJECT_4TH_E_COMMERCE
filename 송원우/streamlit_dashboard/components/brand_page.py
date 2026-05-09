@@ -23,7 +23,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from config import BRANDS, BRAND_ORDER
-from utils.data_loader import get_reviews, apply_filters, filters_to_hash
+from utils.data_loader import get_reviews, get_tokens, apply_filters, filters_to_hash
 from utils.session import init_session, get_filters, mark_page_visited
 from utils.exceptions import safe_block, empty_state
 from components.filters import render_sidebar_filters
@@ -171,9 +171,13 @@ def render_brand_page(brand_key: str) -> None:
 
     # ── 워드클라우드 (full width) ──────────────────────────────
     st.subheader("리뷰 주요 키워드")
+    st.caption(
+        "preprocessed_bertopic.parquet의 `tokens_topic` 컬럼 사용 — "
+        "Kiwi 형태소 분석(사용자/불용/정규화 사전) 적용된 어휘"
+    )
     with safe_block("워드클라우드"):
-        token_df = get_reviews(columns=("brand", "tokens"))
-        brand_tokens = token_df[token_df["brand"] == effective_brand]["tokens"]
+        token_df = get_tokens(brand=effective_brand, column="tokens_topic")
+        brand_tokens = token_df["tokens_topic"] if "tokens_topic" in token_df.columns else pd.Series(dtype="object")
         _render_wordcloud(brand_tokens, color, label)
 
 
@@ -221,7 +225,27 @@ def _monthly_trend(df: pd.DataFrame, color: str, label: str) -> go.Figure:
         title="월별 리뷰 추이",
     )
     fig.update_traces(line_color=color, marker_color=color)
-    fig.update_layout(height=340, hovermode="x unified")
+
+    # 변곡점 자동 주석 — 최댓값 지점에 annotation
+    if not agg.empty:
+        peak = agg.loc[agg["n"].idxmax()]
+        fig.add_annotation(
+            x=peak["period"], y=peak["n"],
+            text=f"최댓값 {peak['n']:,}건",
+            showarrow=True, arrowhead=2, arrowsize=1.0,
+            ax=0, ay=-30,
+            font=dict(size=10, color=color),
+            bgcolor="rgba(255,255,255,0.85)",
+            borderpad=2,
+        )
+    # 데이터 수집 기준 안내
+    fig.add_annotation(
+        text="ℹ 동일 수집 기준 — 변곡점은 수요 변화/이벤트 가능성",
+        xref="paper", yref="paper", x=0.99, y=1.10,
+        showarrow=False, font=dict(size=10, color="#888"),
+        xanchor="right",
+    )
+    fig.update_layout(height=360, hovermode="x unified", margin=dict(t=70))
     return fig
 
 
@@ -260,12 +284,29 @@ def _price_histogram(df: pd.DataFrame, color: str, label: str) -> go.Figure:
     return fig
 
 
+# 워드클라우드 추가 불용어 — 형태소 분석 후에도 남는 일반 평가 어휘
+_EXTRA_STOPWORDS = {
+    "좋다", "좋은", "좋아", "좋네", "좋고", "좋았", "좋아요", "괜찮다", "괜찮", "괜찮아",
+    "있다", "있는", "있어", "있고", "없다", "없는", "없어",
+    "같다", "같아", "같은", "같이", "이다", "되다", "되는", "된다",
+    "그냥", "정말", "진짜", "너무", "조금", "약간", "엄청", "완전", "되게", "매우", "많이",
+    "사다", "사서", "구매", "주문", "받다", "받았", "받은",
+    "생각", "느낌", "기분", "그런", "이런", "저런", "어떤",
+    "하다", "하는", "한", "해서", "해요", "합니다", "했어요", "했다",
+    "그리고", "근데", "하지만", "아주", "역시", "딱",
+    "것", "수", "때", "거", "게", "걸", "더", "안", "못",
+}
+
+
 def _render_wordcloud(token_series: pd.Series, color: str, label: str) -> None:
     """워드클라우드 또는 Top-30 bar 폴백."""
     tokens_all = " ".join(token_series.dropna().astype(str)).split()
     freq = Counter(tokens_all)
-    # 불용어 제거 (길이 1 또는 숫자만인 단어)
-    freq = {w: c for w, c in freq.items() if len(w) > 1 and not w.isdigit()}
+    # 불용어 제거: 길이 1 / 숫자만 / 일반 평가 어휘
+    freq = {
+        w: c for w, c in freq.items()
+        if len(w) > 1 and not w.isdigit() and w not in _EXTRA_STOPWORDS
+    }
 
     if not freq:
         empty_state("토큰 데이터 없음")

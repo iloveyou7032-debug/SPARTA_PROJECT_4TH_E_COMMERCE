@@ -17,20 +17,23 @@ DATA_DIR = PROJECT_ROOT / "송원우" / "final_data"  # 실제 parquet 위치
 # 데이터 파일명 (data contract — 모델팀과 합의)
 PATHS = {
     "reviews":     DATA_DIR / "preprocessed_absa.parquet",
-    "topics":      DATA_DIR / "topic_results.parquet",            # 미생성: 더미 사용
-    "absa":        DATA_DIR / "absa_predictions_full.parquet",    # 미생성: 더미 사용
-    "positioning": DATA_DIR / "positioning_scores.parquet",       # 미생성: 더미 사용
-    "sna":         DATA_DIR / "sna_centrality.parquet",           # 미생성: 더미 사용
+    "tokens":      DATA_DIR / "preprocessed_bertopic.parquet",     # 형태소(사용자/불용/정규화 사전 적용) 토큰 소스
+    "topics":      DATA_DIR / "athleisure_bertopic.parquet",      # 성능개선중
+    "absa":          DATA_DIR / "absa_predictions_full.parquet",     # 미생성: 더미 사용 (하위 호환 폴백)
+    "absa_labeler1": DATA_DIR / "absa_labeler1.parquet",            # 라벨러1(안진식) 층화 추출 결과
+    "absa_complement": DATA_DIR / "absa_fila_complement_predictions.parquet",  # 송원우 FILA complement 추론 결과
+    "positioning": DATA_DIR / "athleisure_bertopic.parquet",       # 미생성: 더미 사용
+    "sna":         DATA_DIR / "athleisure_bertopic.parquet",           # 미생성: 더미 사용
 }
 
 # ─────────────────────────────────────────────────────────────
 # 브랜드 메타 — 자사/경쟁사 구분, 색상, 표시 이름
 # ─────────────────────────────────────────────────────────────
 BRANDS = {
-    "FILA":   {"label": "휠라(FILA)",   "color": "#002663", "is_self": True},
-    "안다르": {"label": "안다르",       "color": "#E60012", "is_self": False},
-    "젝시믹스": {"label": "젝시믹스",   "color": "#FF6B35", "is_self": False},
-    "룰루레몬": {"label": "룰루레몬",   "color": "#5B9BD5", "is_self": False},
+    "FILA":   {"label": "휠라(FILA)",   "color": "#003087", "is_self": True},
+    "안다르": {"label": "안다르",       "color": "#D4000F", "is_self": False},
+    "젝시믹스": {"label": "젝시믹스",   "color": "#E0561A", "is_self": False},
+    "룰루레몬": {"label": "룰루레몬",   "color": "#1565C0", "is_self": False},
 }
 BRAND_ORDER = ["FILA", "안다르", "젝시믹스", "룰루레몬"]
 BRAND_COLORS = {b: m["color"] for b, m in BRANDS.items()}

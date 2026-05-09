@@ -3,12 +3,13 @@
 ================================================
 
 정형 데이터 기반 비즈니스 분석 (preprocessed_absa.parquet 실데이터):
-  1. 체형별 만족도     — 키·몸무게 구간별 평균 평점 Heatmap
-  2. 가격 탄력성       — 할인율(%) vs 평균 평점 Scatter (브랜드별 프리미엄 방어력 비교)
-  3. 고관여 인게이지먼트 — 포토 리뷰 비율 + 평균 도움이 돼요 + 신상품 포토 비율
-  4. SKU 복잡도        — 색상 수 구간별 리뷰 수 분포 Box Plot
-  5. 컬러 빈도 분석    — 브랜드별 구매 옵션 상위 컬러
-  6. 리뷰 볼륨 x 평점  — 브랜드 x 카테고리 사분면 Scatter
+  1. 체형별 만족도        — 키·몸무게 구간별 평균 평점 Heatmap
+  2. 할인율별 평점 분포   — 할인율(%) vs 평균 평점 Scatter (프로모션 강도 vs 만족도)
+  3. 고관여 인게이지먼트  — 포토 리뷰 비율 + 평균 도움이 돼요 + 신상품 포토 비율
+  4. SKU 복잡도           — 색상 수 구간별 리뷰 수 분포 Box Plot
+  5. 컬러 빈도 분석       — 브랜드별 구매 옵션 상위 컬러
+  6. 리뷰 볼륨 x 평점     — 브랜드 x 카테고리 사분면 Scatter
+  7. Action Recommendation — 상품 전략 요약 카드
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ import re
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -37,8 +39,15 @@ st.set_page_config(
 init_session()
 mark_page_visited("product_strategy")
 
-st.title("2. 상품 및 고객 전략")
-st.caption("체형 적합성 · 가격 탄력성 · 고관여 인게이지먼트 · SKU 복잡도 · 컬러 빈도 · 사분면 분석")
+st.title("상품 및 고객 전략")
+st.caption("체형 적합성 · 할인율별 평점 · 고관여 인게이지먼트 · SKU 복잡도 · 컬러 빈도 · 사분면 분석")
+st.markdown(
+    "<p style='font-size:12px; color:#888; margin:2px 0 2px;'>"
+    "📊 홈 &nbsp;›&nbsp; <strong>상품/고객 전략</strong> &nbsp;›&nbsp; "
+    "BERTopic &nbsp;›&nbsp; ABSA &nbsp;›&nbsp; 포지셔닝</p>",
+    unsafe_allow_html=True,
+)
+st.caption("홈의 브랜드별 KPI에서 파악한 점유율·평점 차이를 정형 데이터(체형·가격·인게이지먼트)로 심화 분석합니다.")
 
 render_sidebar_filters()
 filters = get_filters()
@@ -47,6 +56,39 @@ if not active_brands:
     active_brands = BRAND_ORDER
 
 _CMAP = {b: BRANDS[b]["color"] for b in BRAND_ORDER}
+
+# 한국어 컬러명 → Hex 매핑 (라이트 모드 가독성 기준)
+_KR_COLOR_HEX: dict[str, str] = {
+    "블랙": "#1A1A1A", "검정": "#1A1A1A", "블랙계열": "#1A1A1A",
+    "화이트": "#AAAAAA", "흰색": "#AAAAAA", "흰": "#AAAAAA",
+    "네이비": "#003087", "남색": "#003087", "네이비계열": "#003087",
+    "그레이": "#757575", "회색": "#757575", "그레이계열": "#757575",
+    "베이지": "#C8AA6E", "베이지계열": "#C8AA6E",
+    "아이보리": "#C0B080", "크림": "#C0B080",
+    "핑크": "#E91E8C", "분홍": "#F06292", "핑크계열": "#E91E8C",
+    "레드": "#CC0000", "빨강": "#CC0000", "레드계열": "#CC0000",
+    "블루": "#1565C0", "파랑": "#1565C0", "블루계열": "#1565C0",
+    "그린": "#2E7D32", "초록": "#2E7D32", "그린계열": "#2E7D32",
+    "민트": "#00897B", "민트계열": "#00897B",
+    "카키": "#827717", "올리브": "#556B2F",
+    "브라운": "#5D4037", "갈색": "#795548", "카멜": "#795548", "브라운계열": "#5D4037",
+    "퍼플": "#6A1B9A", "보라": "#7B1FA2", "자주": "#880E4F",
+    "옐로우": "#F9A825", "노랑": "#F57F17", "옐로우계열": "#F9A825",
+    "오렌지": "#E65100", "오렌지계열": "#E65100",
+    "라임": "#558B2F", "연두": "#7CB342",
+    "코랄": "#E64A4A",
+    "차콜": "#37474F", "챠콜": "#37474F", "차콜계열": "#37474F",
+    "스카이블루": "#0288D1", "하늘": "#0288D1",
+    "와인": "#880E4F", "버건디": "#880E4F",
+    "머스타드": "#F57F17",
+    "샌드": "#A1887F",
+    "딥블루": "#0D47A1",
+    "연분홍": "#AD1457",
+    "골드": "#C79100",
+    "실버": "#757575",
+    "다크그린": "#1B5E20",
+    "라이트블루": "#0277BD",
+}
 
 # ── 실데이터 집계 함수 ───────────────────────────────────────
 
@@ -94,9 +136,18 @@ def _price_elasticity_df(brand: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=CACHE_TTL)
 def _engagement_df() -> pd.DataFrame:
-    df = get_reviews(columns=("brand", "has_image", "helpful_count", "is_new"))
+    df = get_reviews(columns=("brand", "has_image", "helpful_count", "is_new", "review_date", "collect_date"))
     df = df.copy()
     df["is_new_bool"] = df["is_new"].isin(["True", "1.0"]).astype(int)
+
+    # 노출 기간 보정용 일수 계산 (수집일 - 작성일, 최소 1일)
+    if "review_date" in df.columns and "collect_date" in df.columns:
+        df["review_date"]  = pd.to_datetime(df["review_date"], errors="coerce")
+        df["collect_date"] = pd.to_datetime(df["collect_date"], errors="coerce")
+        df["days_exposed"] = (df["collect_date"] - df["review_date"]).dt.days.clip(lower=1)
+    else:
+        df["days_exposed"] = 1
+
     rows = []
     for brand in BRAND_ORDER:
         sub = df[df["brand"] == brand]
@@ -104,14 +155,17 @@ def _engagement_df() -> pd.DataFrame:
             continue
         photo_ratio = float(sub["has_image"].mean())
         helpful_avg = float(sub["helpful_count"].mean())
+        # 노출 기간 정규화: helpful_count / days_exposed (일평균 도움이 돼요)
+        helpful_per_day = float((sub["helpful_count"] / sub["days_exposed"]).mean())
         new_sub = sub[sub["is_new_bool"] == 1]
         new_photo = float(new_sub["has_image"].mean()) if len(new_sub) > 0 else 0.0
         rows.append({
             "브랜드":           BRANDS[brand]["label"],
             "brand_key":        brand,
-            "포토 리뷰 비율":   round(photo_ratio, 4),
-            "평균 도움이 돼요":  round(helpful_avg, 2),
-            "신상품 포토 비율":  round(new_photo, 4),
+            "포토 리뷰 비율":     round(photo_ratio, 4),
+            "평균 도움이 돼요":    round(helpful_avg, 2),
+            "일평균 도움이 돼요":  round(helpful_per_day, 4),
+            "신상품 포토 비율":   round(new_photo, 4),
         })
     return pd.DataFrame(rows)
 
@@ -212,15 +266,16 @@ with safe_block("체형 Heatmap"):
 st.divider()
 
 # ─────────────────────────────────────────────────────────────
-# 2. 가격 탄력성 Scatter (X: 할인율%)
+# 2. 할인율별 평점 분포 (구 "가격 탄력성" — 명칭 정정)
 # ─────────────────────────────────────────────────────────────
-st.subheader("가격 탄력성")
+st.subheader("할인율별 평점 분포")
 st.caption(
-    "할인율(%) vs 평균 평점 — 룰루레몬(노세일)과 국내 브랜드(상시 할인) 간 "
-    "프리미엄 방어력 및 최적 프로모션 강도 비교"
+    "할인율(%) 구간별 평균 평점 — 프로모션 강도와 만족도의 관계 관찰. "
+    "(엄밀한 가격 탄력성은 가격 변화 → 수요량(판매량/전환율) 변화로 정의되며, "
+    "본 차트는 만족도 측면의 보조 지표로 해석)"
 )
 
-with safe_block("가격 탄력성 Scatter"):
+with safe_block("할인율 × 평점 Scatter"):
     pe_cols = st.columns(len(active_brands))
     for col, brand in zip(pe_cols, active_brands):
         with col:
@@ -275,16 +330,31 @@ with safe_block("인게이지먼트"):
             st.plotly_chart(fig_e1, use_container_width=True)
 
         with e2:
+            normalize_helpful = st.toggle(
+                "노출 기간 보정 (일평균)",
+                value=False,
+                help="helpful_count는 리뷰 노출 기간이 길수록 누적되므로 "
+                     "일수로 나눠 정규화한 일평균 값을 표시합니다.",
+                key="helpful_normalize",
+            )
+            metric_col = "일평균 도움이 돼요" if normalize_helpful else "평균 도움이 돼요"
+            metric_title = (
+                "일평균 도움이 돼요 (helpful_count / days_exposed)"
+                if normalize_helpful else
+                "평균 도움이 돼요 (helpful_count)"
+            )
+            text_fmt = "{:.4f}" if normalize_helpful else "{:.2f}"
+
             fig_e2 = px.bar(
                 eng_df,
-                x="브랜드", y="평균 도움이 돼요",
+                x="브랜드", y=metric_col,
                 color="brand_key",
                 color_discrete_map=_CMAP,
-                title="평균 도움이 돼요 (helpful_count)",
-                labels={"평균 도움이 돼요": "평균 수"},
-                text=eng_df["평균 도움이 돼요"].apply(lambda x: f"{x:.2f}"),
+                title=metric_title,
+                labels={metric_col: "평균 수"},
+                text=eng_df[metric_col].apply(text_fmt.format),
             )
-            y_max2 = max(eng_df["평균 도움이 돼요"].max() * 1.3, 0.5)
+            y_max2 = max(eng_df[metric_col].max() * 1.3, 0.5 if not normalize_helpful else 0.01)
             fig_e2.update_layout(height=360, showlegend=False, yaxis_range=[0, y_max2])
             fig_e2.update_traces(textposition="outside")
             st.plotly_chart(fig_e2, use_container_width=True)
@@ -303,6 +373,49 @@ with safe_block("인게이지먼트"):
             fig_e3.update_layout(height=360, showlegend=False, yaxis_tickformat=".0%", yaxis_range=[0, y_max3])
             fig_e3.update_traces(textposition="outside")
             st.plotly_chart(fig_e3, use_container_width=True)
+
+        with st.expander("고관여 원문 탐색 — 튀는 값 리뷰 확인"):
+            oc1, oc2 = st.columns(2)
+            with oc1:
+                out_brand = st.selectbox(
+                    "브랜드",
+                    options=active_brands,
+                    format_func=lambda b: BRANDS[b]["label"],
+                    key="outlier_brand",
+                )
+            with oc2:
+                out_metric = st.radio(
+                    "이상치 기준 지표",
+                    ["helpful_count (도움이 돼요)", "has_image (포토 리뷰)"],
+                    horizontal=True,
+                    key="outlier_metric",
+                )
+            metric_col = "helpful_count" if "helpful_count" in out_metric else "has_image"
+
+            if metric_col == "helpful_count":
+                threshold = st.slider("최솟값 (이 값 이상만 표시)", 1, 100, 5, key="outlier_threshold")
+            else:
+                threshold = 1
+
+            raw_df = get_reviews(
+                columns=("review_id", "brand", "rating", "helpful_count", "has_image", "content_clean")
+            )
+            sub_raw = raw_df[raw_df["brand"] == out_brand].copy()
+            if metric_col == "helpful_count":
+                sub_raw = sub_raw[sub_raw["helpful_count"] >= threshold]
+            else:
+                sub_raw = sub_raw[sub_raw["has_image"] == 1]
+            sub_raw = sub_raw.sort_values(metric_col, ascending=False).head(50)
+
+            if sub_raw.empty:
+                empty_state("해당 조건의 리뷰 없음", "기준값을 낮추거나 브랜드를 변경해 주세요.")
+            else:
+                st.caption(f"{len(sub_raw):,}건 표시 (최대 50건, {metric_col} 내림차순)")
+                st.dataframe(
+                    sub_raw[["review_id", "rating", "helpful_count", "has_image", "content_clean"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
 st.divider()
 
@@ -352,14 +465,30 @@ with safe_block("컬러 Bar"):
             if cf_df.empty:
                 empty_state(f"{BRANDS[brand]['label']} 데이터 없음")
             else:
-                fig_cf = px.bar(
-                    cf_df.sort_values("언급 수"),
-                    x="언급 수", y="컬러", orientation="h",
+                sorted_df = cf_df.sort_values("언급 수")
+                # y축 라벨 앞 색상 동그라미 — HTML span 으로 컬러 칩 렌더링
+                y_labels = [
+                    f"<span style='color:{_KR_COLOR_HEX.get(c, '#999')}'>●</span> {c}"
+                    for c in sorted_df["컬러"]
+                ]
+                # 막대는 브랜드 단색으로 통일 (가독성 우선)
+                fig_cf = go.Figure(go.Bar(
+                    x=sorted_df["언급 수"],
+                    y=y_labels,
+                    orientation="h",
+                    marker_color=BRANDS[brand]["color"],
+                    marker_line_width=0,
+                    text=sorted_df["언급 수"].apply(lambda v: f"{v:,}"),
+                    textposition="outside",
+                    hovertemplate="%{y}: %{x:,}건<extra></extra>",
+                ))
+                fig_cf.update_layout(
                     title=BRANDS[brand]["label"],
-                    color_discrete_sequence=[BRANDS[brand]["color"]],
-                    labels={"언급 수": "언급 수", "컬러": ""},
+                    height=380,
+                    showlegend=False,
+                    xaxis_title="언급 수",
+                    yaxis=dict(tickfont=dict(size=12)),
                 )
-                fig_cf.update_layout(height=380, showlegend=False)
                 st.plotly_chart(fig_cf, use_container_width=True)
 
 st.divider()
@@ -398,3 +527,57 @@ with safe_block("사분면 Scatter"):
         fig_q.update_traces(textposition="top center", textfont_size=10, marker_size=12)
         fig_q.update_layout(height=540, hovermode="closest")
         st.plotly_chart(fig_q, use_container_width=True)
+
+st.divider()
+
+# ─────────────────────────────────────────────────────────────
+# 7. Action Recommendation — 상품 전략 요약
+# ─────────────────────────────────────────────────────────────
+st.subheader("Action Recommendation — 상품 전략 요약")
+st.caption("위 6개 분석 결과를 종합한 휠라 의류 진입 시 권장 액션")
+
+action_cols = st.columns(3)
+actions = [
+    {
+        "icon": "🎨",
+        "title": "초기 SKU — 무채색 중심",
+        "color": "#1A1A1A",
+        "desc": "컬러 빈도 분석 결과 4브랜드 공통 Top3는 **블랙·네이비·그레이** "
+                "→ 초기 라인업은 무채색 60% / 시즌 컬러 40%로 안전 마진 확보 후 확장",
+        "evidence": "근거: 컬러 빈도 분석 §5",
+    },
+    {
+        "icon": "👟",
+        "title": "신발 헤리티지 → 의류 전이",
+        "color": "#003087",
+        "desc": "FILA 신발의 **레트로·디스럽터 라인 인지도**를 의류 컬렉션에 "
+                "공동 브랜딩 → 헤리티지 자산 활용한 차별화 진입",
+        "evidence": "근거: 사분면 분석 §6 (현재 의류 카테고리 진입 약함)",
+    },
+    {
+        "icon": "🧪",
+        "title": "기능성 소재 메시지 강화",
+        "color": "#2E7D32",
+        "desc": "룰루레몬·젝시믹스 강점은 **기능성·소재 신뢰** — 휠라는 "
+                "이 영역 약세 → R&D 메시지(쿨링·압박·통기성)를 PDP·광고 카피에 우선 노출",
+        "evidence": "근거: ABSA §4 (기능성/소재 약점 검증 시)",
+    },
+]
+for col, a in zip(action_cols, actions):
+    with col:
+        st.markdown(
+            f"""<div style='border: 2px solid {a['color']}; border-radius: 8px;
+            padding: 16px; height: 100%; background: {a['color']}11;'>
+                <div style='font-size: 24px;'>{a['icon']}</div>
+                <div style='color: {a['color']}; font-weight: 700; font-size: 15px; margin-top: 4px;'>
+                    {a['title']}
+                </div>
+                <p style='font-size: 13px; margin-top: 10px; color: #222; line-height: 1.55;'>
+                    {a['desc']}
+                </p>
+                <div style='font-size: 11px; color: #777; margin-top: 8px; font-style: italic;'>
+                    {a['evidence']}
+                </div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
