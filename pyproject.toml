@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "google-generativeai>=0.8.6",
     "ipykernel>=7.2.0",
     "kiwi>=10.3.1",
     "kiwipiepy>=0.23.1",
@@ -19,4 +20,5 @@ dependencies = [
     "pyzmq>=27.1.0",
     "scikit-posthocs>=0.12.0",
     "statsmodels>=0.14.6",
+    "streamlit-embedcode>=0.1.2",
 ]

@@ -595,6 +595,8 @@ with tab_b:
 <p style='font-size:13px; margin-top:8px; color:#333; line-height:1.5;'>{s['desc']}</p>
 </div>""", unsafe_allow_html=True)
 
+
+
 # # 신발/의류 시드 단어 — 의류 풀 확장 (튜터 피드백: 의류 노드 2개 → 시드 확장 + 본질 인사이트 보강)
 # _SHOE_SEEDS = {
 #     "신발", "운동화", "스니커즈", "슈즈", "깔창", "밑창", "굽", "인솔",
@@ -940,3 +942,93 @@ with tab_b:
 # """,
 #     unsafe_allow_html=True,
 # )
+
+# =====================================================================
+# ── [신규 추가] AI 실시간 트렌드 통합 전략 리포트 ─────────────────────────
+# =====================================================================
+from utils.llm_utils import get_total_insight
+from config import ASPECT_LABELS
+import datetime
+
+st.divider()
+st.subheader("🤖 AI 기반 실시간 트렌드 통합 전략 리포트")
+st.caption("내부 리뷰 데이터의 팩트와 외부 인스타그램 실시간 트렌드를 입체적으로 비교·분석합니다.")
+
+# 1. AI 타겟 브랜드 선택
+ai_target_brand = st.selectbox(
+    "AI 심층 분석 대상 브랜드 선택",
+    options=BRAND_ORDER,
+    index=0,
+    key="ai_target_brand"
+)
+
+# 2. 데이터 요약 함수
+def build_actual_data_summary(brand: str, pol_df: pd.DataFrame, pos_df: pd.DataFrame, sna_df: pd.DataFrame) -> str:
+    pol_sub = pol_df[pol_df["brand"] == brand]
+    if pol_sub.empty: return f"{brand}의 리뷰 데이터 없음"
+    
+    total_reviews = int(pol_sub.iloc[0]["n_reviews"]) if "n_reviews" in pol_sub.columns else 0
+    aspect_lines = []
+    for _, r in pol_sub.iterrows():
+        asp_name = ASPECT_LABELS.get(r["aspect"], r["aspect"])
+        aspect_lines.append(f"- {asp_name}: 긍정 {r.get('P_ratio', 0)*100:.1f}%, 부정 {r.get('N_ratio', 0)*100:.1f}%")
+    
+    pos_sub = pos_df[pos_df["brand"] == brand]
+    pos_summary = f"- 기능성(X): {pos_sub.iloc[0].get('x_function', 0):.3f} / 헤리티지(Y): {pos_sub.iloc[0].get('y_heritage', 0):.3f}" if not pos_sub.empty else "좌표 없음"
+
+    sna_sub = sna_df[sna_df["brand"] == brand] if not sna_df.empty else pd.DataFrame()
+    sna_summary = ", ".join(sna_sub.nlargest(5, "centrality")["keyword"].tolist()) if not sna_sub.empty and "centrality" in sna_sub.columns else "데이터 없음"
+
+    return f"[{brand}] 데이터 요약\n- 리뷰 수: {total_reviews:,}건\n[포지셔닝]\n{pos_summary}\n[6속성 평가]\n{chr(10).join(aspect_lines)}\n[핵심 키워드]\n- {sna_summary}"
+
+# ---------------------------------------------------------
+# [추가] 캐싱 함수 정의 (함수 정의 구역에 위치)
+# ---------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def get_cached_insight(summary, query):
+    """
+    동일한 데이터 요약과 쿼리에 대해 API 호출 결과를 캐싱하여 
+    할당량(Quota) 소모를 방지합니다.
+    """
+    return get_total_insight(summary, query)
+
+# 3. 자동 쿼리 생성
+current_date = datetime.datetime.now()
+season = "S/S(봄/여름)" if 3 <= current_date.month <= 8 else "F/W(가을/겨울)"
+auto_query = f"{current_date.year}년 {season} {ai_target_brand} 인스타그램 인기 키워드 및 애슬레저 스타일 트렌드"
+
+# 4. 분석 실행
+if st.button(f"✨ {ai_target_brand} 통합 전략 3단 리포트 생성", use_container_width=True, type="primary"):
+    actual_summary_text = build_actual_data_summary(ai_target_brand, polarity, pos, sna)
+    
+    with st.spinner(f"전문 전략가가 {ai_target_brand}의 시장 데이터와 트렌드를 융합 분석 중입니다..."):
+        ai_hashtags, full_report = get_total_insight(actual_summary_text, auto_query)
+        
+        # [핵심 로직] 브랜드+코디 해시태그를 첫 번째에 강제 삽입
+        brand_hashtag = f"{ai_target_brand}코디"
+        final_hashtags = [brand_hashtag] + ai_hashtags 
+        
+        # [결과 1] 3단 리포트 출력
+        st.markdown(full_report)
+            
+        # [결과 2] 인스타그램 동적 해시태그 출력
+        st.divider()
+        st.subheader(f"📸 {ai_target_brand} 외부 트렌드 크로스체크")
+        st.info("리포트에서 언급된 트렌드 해시태그를 클릭하여 실제 인스타그램 피드를 직접 확인해 보세요.")
+
+        col1, col2, col3 = st.columns(3)
+        
+                # final_hashtags 버튼 출력 부분 수정
+        with col1: 
+            if len(final_hashtags) > 0:
+                # 구글 이미지 검색을 통해 인스타그램 게시물을 우회 확인 (최근 1개월 데이터)
+                link = f"https://www.google.com/search?q=site:instagram.com+{final_hashtags[0]}&tbm=isch&tbs=qdr:m"
+                st.link_button(f"📸 #{final_hashtags[0]} 보기", link, use_container_width=True)
+        with col2: 
+            if len(final_hashtags) > 1:
+                link = f"https://www.google.com/search?q=site:instagram.com+{final_hashtags[1]}&tbm=isch&tbs=qdr:m"
+                st.link_button(f"📸 #{final_hashtags[1]} 보기", link, use_container_width=True)
+        with col3: 
+            if len(final_hashtags) > 2:
+                link = f"https://www.google.com/search?q=site:instagram.com+{final_hashtags[2]}&tbm=isch&tbs=qdr:m"
+                st.link_button(f"📸 #{final_hashtags[2]} 보기", link, use_container_width=True)
