@@ -45,7 +45,7 @@ def _brand_card(brand: str, n_reviews: int, mean_rating: float, rating_std: floa
             <div style="font-size:13px; color:#ccc; margin-top:2px;">{meta['label']}</div>
             <div style="font-size:24px; font-weight:600; margin-top:6px;">{n_reviews:,}</div>
             <div style="font-size:11px; color:#888;">리뷰 수</div>
-            <div style="margin-top:8px; font-size:14px;">⭐ {mean_rating:.2f} <span style="color:#888; font-size:11px;">±{rating_std:.2f}</span></div>
+            <div style="margin-top:8px; font-size:14px;"> {mean_rating:.2f} <span style="color:#888; font-size:11px;">±{rating_std:.2f}</span></div>
         </div>
         """,
         unsafe_allow_html=True,

@@ -16,12 +16,12 @@ from config import BRAND_ORDER
 
 # 기본 필터값
 _DEFAULTS = {
-    "brands":        BRAND_ORDER[0],    # 단일 문자열 — 브랜드 pills/버튼으로 관리
+    "brands":        list(BRAND_ORDER),  # list[str] — 사이드바 multi pills 호환
     "rating_sel":    "전체",            # selectbox → str ("전체" / "1점" … "5점")
     "cat1_filters":  [],                # checkbox → list[str], 빈 리스트 = 전체
     "cat2_filters":  [],
     "cat3_filters":  [],
-    "year_range":    (2022, 2026),
+    "year_range":    (2024, 2026),      # filters.py 슬라이더 범위와 동기화
     "price_range":   (0, 500_000),      # discount_price 기준 (원)
     # UI 내부 상태
     "_page_visited": set(),
@@ -30,10 +30,23 @@ _DEFAULTS = {
 
 
 def init_session() -> None:
-    """페이지 진입 시 호출. 누락된 키만 채움."""
+    """페이지 진입 시 호출. 누락된 키만 채움 + 타입 정합화."""
     for k, v in _DEFAULTS.items():
         if k not in st.session_state:
             st.session_state[k] = v.copy() if hasattr(v, "copy") else v
+
+    # brands는 항상 list[str] 이어야 멀티-pills와 호환 (이전 세션에서 단일 string 잔존 시 방어)
+    if isinstance(st.session_state.get("brands"), str):
+        st.session_state.brands = [st.session_state.brands]
+
+    # year_range는 슬라이더 min/max 범위 내로 클램프
+    yr = st.session_state.get("year_range")
+    if yr is not None:
+        lo, hi = tuple(yr)
+        lo = max(2024, min(lo, 2026))
+        hi = max(2024, min(hi, 2026))
+        if (lo, hi) != tuple(yr):
+            st.session_state.year_range = (lo, hi)
 
 
 def get_filters() -> dict:

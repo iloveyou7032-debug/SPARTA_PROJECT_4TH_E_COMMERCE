@@ -1,23 +1,15 @@
 """
-filters.py — 사이드바 필터 위젯
+filters.py — 사이드바 필터 위젯 (개선 버전)
 ================================
 
-모든 분석 페이지(P1~P7)가 공유하는 필터 UI.
-session_state 에 직접 바인딩되며, 페이지 전환 후에도 선택값이 유지됨.
-
-위젯 구성:
-  · 브랜드       : multiselect
-  · 연도 범위    : slider
-  · 평점         : selectbox
-  · 카테고리1    : checkbox (옵션 제공 시)
-  · 카테고리2    : checkbox (옵션 제공 시)
-  · 카테고리3    : checkbox (옵션 제공 시)
-  · 가격 범위    : slider (min/max 제공 시)
+변경 사항:
+  1. 순서 조정: 브랜드 > 평점 > 연도 > 가격 > 카테고리
+  2. UI 업그레이드: 브랜드와 평점에 st.pills 적용 (더 직관적인 버튼 형태)
+  3. 시각적 가독성 개선
 """
 from __future__ import annotations
 
 import streamlit as st
-
 from config import BRAND_ORDER, BRANDS
 from utils.session import filters_summary, reset_filters
 
@@ -29,101 +21,90 @@ def render_sidebar_filters(
     cat3_options: list[str] | None = None,
     price_min: int = 0,
     price_max: int = 500_000,
-    lock_brand: str | None = None,       # 브랜드 페이지에서 해당 브랜드 고정 시 사용
+    lock_brand: str | None = None,
+    show_year: bool = True,
+    show_price: bool = True,
+    show_category: bool = True,
 ) -> None:
-    """사이드바 필터 렌더링. 분석 페이지 진입부에서 1회 호출."""
+    """사이드바 필터 렌더링. 분석 페이지 진입부에서 1회 호출.
+
+    페이지별 활성 컬럼이 다른 경우 show_year/show_price/show_category로
+    표시 항목을 조정한다 (BERTopic 페이지는 brand·rating·content만 보유).
+    """
 
     sb = st.sidebar
-    sb.markdown("### 필터")
+    sb.markdown("## 필터 설정")
+    sb.markdown("---")
 
-    # ── 브랜드 ────────────────────────────────────────────────
+    # ── 1. 브랜드 ──────────────────────────────────────────────
+    sb.markdown("**브랜드**")
     if lock_brand:
-        sb.markdown(f"**브랜드**: {BRANDS[lock_brand]['label']}")
-        st.session_state.brands = lock_brand   # 단일 문자열 유지
+        sb.info(f"{BRANDS[lock_brand]['label']}")
+        st.session_state.brands = [lock_brand]
     else:
-        # 분석 페이지: multiselect (session_state.brands가 string이면 list로 정규화)
-        raw = st.session_state.brands
-        current_list = [raw] if isinstance(raw, str) else (raw if raw else BRAND_ORDER)
-        st.session_state.brands = current_list  # multiselect는 list여야 함
-        sb.multiselect(
-            "브랜드",
+        # brands가 단일 string 잔존 시 list로 정합화 (multi-pills 호환)
+        _b = st.session_state.get("brands")
+        if isinstance(_b, str):
+            st.session_state.brands = [_b]
+
+        # 전체 선택/해제 버튼 (세션 스테이트 직접 조작)
+        b_col1, b_col2 = sb.columns(2)
+        if b_col1.button("전체 선택", use_container_width=True):
+            st.session_state.brands = list(BRAND_ORDER)
+            st.rerun()
+        if b_col2.button("전체 해제", use_container_width=True):
+            st.session_state.brands = []
+            st.rerun()
+
+        # 브랜드 선택 버튼형 UI
+        sb.pills(
+            "브랜드 선택",
             options=BRAND_ORDER,
-            default=current_list,
+            selection_mode="multi",
             key="brands",
             format_func=lambda b: BRANDS[b]["label"],
+            label_visibility="collapsed" # 중복 라벨 숨김
         )
 
-    # ── 연도 범위 ─────────────────────────────────────────────
-    sb.slider(
-        "연도 범위",
-        min_value=2022,
-        max_value=2026,
-        value=tuple(st.session_state.year_range),
-        step=1,
-        key="year_range",
-    )
+    sb.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-    # ── 평점 ──────────────────────────────────────────────────
-    rating_options = ["전체", "1점", "2점", "3점", "4점", "5점"]
-    current_rating = st.session_state.rating_sel
-    if current_rating not in rating_options:
-        current_rating = "전체"
-    sb.selectbox(
+    # ── 2. 평점 ────────────────────────────────────────────────
+    rating_options = ["전체", "1", "2", "3", "4", "5"]
+    sb.pills(
         "평점",
         options=rating_options,
-        index=rating_options.index(current_rating),
+        selection_mode="single",
         key="rating_sel",
     )
 
-    # ── 카테고리1 체크박스 ────────────────────────────────────
-    if cat1_options:
-        with sb.expander("카테고리1", expanded=False):
-            new_cat1 = []
-            for opt in cat1_options:
-                cb_key = f"_cb_cat1_{opt}"
-                if cb_key not in st.session_state:
-                    st.session_state[cb_key] = (opt in st.session_state.cat1_filters)
-                if st.checkbox(opt, key=cb_key):
-                    new_cat1.append(opt)
-            st.session_state.cat1_filters = new_cat1
+    sb.markdown("<div style='height:15px'></div>", unsafe_allow_html=True)
 
-    # ── 카테고리2 체크박스 ────────────────────────────────────
-    if cat2_options:
-        with sb.expander("카테고리2", expanded=False):
-            new_cat2 = []
-            for opt in cat2_options:
-                cb_key = f"_cb_cat2_{opt}"
-                if cb_key not in st.session_state:
-                    st.session_state[cb_key] = (opt in st.session_state.cat2_filters)
-                if st.checkbox(opt, key=cb_key):
-                    new_cat2.append(opt)
-            st.session_state.cat2_filters = new_cat2
+    # ── 3. 연도 범위 ─────────────────────────────────────────────
+    if show_year:
+        yr = tuple(st.session_state.year_range)
+        yr = (max(2024, min(yr[0], 2026)), max(2024, min(yr[1], 2026)))
+        if yr != tuple(st.session_state.year_range):
+            st.session_state.year_range = yr
+        sb.slider(
+            "연도 범위",
+            min_value=2024,
+            max_value=2026,
+            value=tuple(st.session_state.year_range),
+            step=1,
+            key="year_range",
+        )
 
-    # ── 카테고리3 체크박스 ────────────────────────────────────
-    if cat3_options:
-        with sb.expander("카테고리3", expanded=False):
-            new_cat3 = []
-            for opt in cat3_options:
-                cb_key = f"_cb_cat3_{opt}"
-                if cb_key not in st.session_state:
-                    st.session_state[cb_key] = (opt in st.session_state.cat3_filters)
-                if st.checkbox(opt, key=cb_key):
-                    new_cat3.append(opt)
-            st.session_state.cat3_filters = new_cat3
-
-    # ── 가격 범위 ─────────────────────────────────────────────
-    if price_max > price_min:
-        # 저장된 값이 현재 페이지 범위를 벗어나면 클램핑
+    # ── 4. 가격 범위 ─────────────────────────────────────────────
+    if show_price and price_max > price_min:
         stored_lo, stored_hi = st.session_state.price_range
         clamped_lo = max(price_min, min(stored_lo, price_max))
         clamped_hi = min(price_max, max(stored_hi, price_min))
-        if clamped_lo > clamped_hi:
-            clamped_lo, clamped_hi = price_min, price_max
+
         if (clamped_lo, clamped_hi) != (stored_lo, stored_hi):
             st.session_state.price_range = (clamped_lo, clamped_hi)
 
         sb.slider(
-            "가격 범위 (원)",
+            "실구매가 범위 (원)",
             min_value=price_min,
             max_value=price_max,
             value=tuple(st.session_state.price_range),
@@ -132,9 +113,41 @@ def render_sidebar_filters(
             key="price_range",
         )
 
+    # ── 5. 카테고리 필터 (기존 로직 유지) ──────────────────────────
+    # 주의: `with sb.expander(...)` 안에서 위젯을 그릴 때는 `st.checkbox`(현재 컨텍스트)
+    # 를 써야 하며, `sb.checkbox`는 사이드바 root에 그려져 expander 밖으로 새어 나간다.
+    if show_category and (cat1_options or cat2_options or cat3_options):
+        sb.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+        sb.markdown("**카테고리 상세**")
+        if cat1_options:
+            with sb.expander("대분류", expanded=False):
+                new_cat1 = [
+                    opt for opt in cat1_options
+                    if st.checkbox(opt, key=f"_cb_cat1_{opt}",
+                                   value=(opt in st.session_state.cat1_filters))
+                ]
+                st.session_state.cat1_filters = new_cat1
+        if cat2_options:
+            with sb.expander("중분류", expanded=False):
+                new_cat2 = [
+                    opt for opt in cat2_options
+                    if st.checkbox(opt, key=f"_cb_cat2_{opt}",
+                                   value=(opt in st.session_state.cat2_filters))
+                ]
+                st.session_state.cat2_filters = new_cat2
+        if cat3_options:
+            with sb.expander("소분류", expanded=False):
+                new_cat3 = [
+                    opt for opt in cat3_options
+                    if st.checkbox(opt, key=f"_cb_cat3_{opt}",
+                                   value=(opt in st.session_state.cat3_filters))
+                ]
+                st.session_state.cat3_filters = new_cat3
+
     # ── 하단 요약 + 초기화 ────────────────────────────────────
-    sb.divider()
-    sb.caption(f"**적용 중**: {filters_summary()}")
-    if sb.button("필터 초기화", use_container_width=True):
+    sb.markdown("---")
+    sb.caption(f"**현재 설정 요약**")
+    sb.caption(filters_summary())
+    if sb.button("필터 초기화", use_container_width=True, type="primary"):
         reset_filters()
         st.rerun()

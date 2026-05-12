@@ -192,9 +192,9 @@ def _build_hover_text(brand: str, row: pd.Series,
 
     parts = [
         f"<b style='font-size:14px; color:{meta['color']}'>{meta['label']}</b>",
-        f"<br>📊 리뷰 <b>{n_reviews:,}</b>건",
-        f"<br>⭐ 평점 <b>{mean_rating:.2f}</b>" if pd.notna(mean_rating) else "",
-        f"<br>📍 좌표 ({row['x_function']:.2f}, {row['y_heritage']:.2f})",
+        f"<br> 리뷰 <b>{n_reviews:,}</b>건",
+        f"<br> 평점 <b>{mean_rating:.2f}</b>" if pd.notna(mean_rating) else "",
+        f"<br> 좌표 ({row['x_function']:.2f}, {row['y_heritage']:.2f})",
     ]
 
     # ABSA 강/약점 (polarity_df 가 있으면)
@@ -205,10 +205,10 @@ def _build_hover_text(brand: str, row: pd.Series,
             sub["aspect_label"] = sub["aspect"].map(ASPECT_LABELS)
             top_p = sub.nlargest(2, "P_ratio")[["aspect_label", "P_ratio"]]
             top_n = sub.nlargest(2, "N_ratio")[["aspect_label", "N_ratio"]]
-            parts.append("<br><br><b>💪 강점</b>")
+            parts.append("<br><br><b> 강점</b>")
             for _, r in top_p.iterrows():
                 parts.append(f"<br> · {r['aspect_label']} {r['P_ratio']:.1%}")
-            parts.append("<br><b>⚠️ 약점</b>")
+            parts.append("<br><b> 약점</b>")
             for _, r in top_n.iterrows():
                 parts.append(f"<br> · {r['aspect_label']} {r['N_ratio']:.1%}")
 
@@ -216,7 +216,7 @@ def _build_hover_text(brand: str, row: pd.Series,
     if topic_meta is not None and "top_topics" in row.index:
         topics = row.get("top_topics") or []
         if isinstance(topics, list) and topics:
-            parts.append(f"<br><br>🏷️ <b>핵심 토픽</b><br> · " + "<br> · ".join(topics[:3]))
+            parts.append(f"<br><br> <b>핵심 토픽</b><br> · " + "<br> · ".join(topics[:3]))
 
     return "".join(parts)
 

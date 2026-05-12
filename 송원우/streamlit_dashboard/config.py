@@ -14,32 +14,31 @@ APP_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_ROOT.parent.parent              # SPARTA_PROJECT_4TH_E_COMMERCE/
 DATA_DIR = PROJECT_ROOT / "송원우" / "final_data"  # 실제 parquet 위치
 
-# 데이터 파일명 (data contract — 모델팀과 합의)
+# 최종 확정 데이터셋 7개
 PATHS = {
-    "reviews":     DATA_DIR / "preprocessed_absa.parquet",
-    "tokens":      DATA_DIR / "preprocessed_bertopic.parquet",     # 형태소(사용자/불용/정규화 사전 적용) 토큰 소스
-    "topics":      DATA_DIR / "athleisure_bertopic.parquet",      # 성능개선중
-    "absa":          DATA_DIR / "absa_predictions_full.parquet",     # 미생성: 더미 사용 (하위 호환 폴백)
-    "absa_labeler1": DATA_DIR / "absa_labeler1.parquet",            # 라벨러1(안진식) 층화 추출 결과
-    "absa_complement": DATA_DIR / "absa_fila_complement_predictions.parquet",  # 송원우 FILA complement 추론 결과
-    "positioning": DATA_DIR / "athleisure_bertopic.parquet",       # 미생성: 더미 사용
-    "sna":         DATA_DIR / "athleisure_bertopic.parquet",           # 미생성: 더미 사용
+    "absa":          DATA_DIR / "absa_phase_e_predictions.parquet",
+    "bert_110m":     DATA_DIR / "dashboard_reviews_110M.parquet",
+    "bert_22m":      DATA_DIR / "dashboard_reviews_22M.parquet",
+    "bert_low":      DATA_DIR / "dashboard_reviews_low.parquet",
+    "reviews":       DATA_DIR / "preprocessed_absa.parquet",
+    "topic_map":     DATA_DIR / "topic_aspect_mapping.parquet",       # 49토픽
+    "topic_map_low": DATA_DIR / "low_topic_aspect_mapping.parquet",   # 30토픽 (저평점)
 }
 
 # ─────────────────────────────────────────────────────────────
 # 브랜드 메타 — 자사/경쟁사 구분, 색상, 표시 이름
 # ─────────────────────────────────────────────────────────────
 BRANDS = {
-    "FILA":   {"label": "휠라(FILA)",   "color": "#003087", "is_self": True},
-    "안다르": {"label": "안다르",       "color": "#D4000F", "is_self": False},
-    "젝시믹스": {"label": "젝시믹스",   "color": "#E0561A", "is_self": False},
-    "룰루레몬": {"label": "룰루레몬",   "color": "#1565C0", "is_self": False},
+    "FILA":   {"label": "휠라(FILA)",   "color": "#004B87", "is_self": True},
+    "안다르": {"label": "안다르",       "color": "#D6CDC0", "is_self": False},
+    "젝시믹스": {"label": "젝시믹스",   "color": "#1A1A1A", "is_self": False},
+    "룰루레몬": {"label": "룰루레몬",   "color": "#C8102E", "is_self": False},
 }
 BRAND_ORDER = ["FILA", "안다르", "젝시믹스", "룰루레몬"]
 BRAND_COLORS = {b: m["color"] for b, m in BRANDS.items()}
 
 # ─────────────────────────────────────────────────────────────
-# ABSA 6속성 — 한글 ↔ 영문 키 매핑
+# ABSA 6속성 — 한글 ↔ 영문 키 매핑 (ABSA EXAONE 추론 결과 기준)
 # ─────────────────────────────────────────────────────────────
 ASPECTS = [
     {"key": "fit_size",            "label": "핏/사이즈",       "axis": "x_supp"},
@@ -53,8 +52,46 @@ ASPECT_KEYS   = [a["key"] for a in ASPECTS]
 ASPECT_LABELS = {a["key"]: a["label"] for a in ASPECTS}
 LABEL_TO_KEY  = {a["label"]: a["key"] for a in ASPECTS}
 
+# ─────────────────────────────────────────────────────────────
+# BERTopic 산출 aspect (dashboard_reviews_*.parquet, topic_aspect_mapping.parquet)
+# - ABSA 6속성과 키 체계가 다름. 별도 매핑 사전 사용.
+# ─────────────────────────────────────────────────────────────
+BERT_ASPECT_KR: dict[str, str] = {
+    "aspect_size":     "핏/사이즈",
+    "aspect_material": "소재/내구성",
+    "aspect_quality":  "품질/내구성",
+    "aspect_function": "기능성",
+    "aspect_design":   "디자인",
+    "aspect_brand":    "브랜드/헤리티지",
+    "aspect_price":    "가격/가치",
+    "aspect_other":    "기타",
+    # 약어 호환
+    "size":     "핏/사이즈",
+    "material": "소재/내구성",
+    "quality":  "품질/내구성",
+    "function": "기능성",
+    "design":   "디자인",
+    "brand":    "브랜드/헤리티지",
+    "price":    "가격/가치",
+    "other":    "기타",
+}
+
+# ─────────────────────────────────────────────────────────────
+# aspect → 컬러 매핑 (애슬레저 코어 : 네이비 & 레드 팔레트)
+# ─────────────────────────────────────────────────────────────
+BERT_ASPECT_COLOR: dict[str, str] = {
+    "기능성":          "#660000",
+    "브랜드/헤리티지": "#FF4D4D",  
+    "품질/내구성":     "#CD5B5B",  
+    "핏/사이즈":       "#00205B",  
+    "디자인":          "#B0C4DE",  
+    "소재/내구성":     "#6495ED",  
+    "가격/가치":       "#AB6868",  
+    "기타":            "#DBECF9", 
+}
+
 SENTIMENT_LABELS = ["P", "N", "X"]   # Positive / Negative / 없음
-SENTIMENT_COLOR  = {"P": "#2E7D32", "N": "#C62828", "X": "#9E9E9E"}
+SENTIMENT_COLOR  = {"P": "#004B87", "N": "#C8102E", "X": "#9E9E9E"}
 
 # ─────────────────────────────────────────────────────────────
 # 시각화 임계값
@@ -78,3 +115,14 @@ PAGE_LAYOUT = {
 
 APP_TITLE = "FILA 애슬레저 시장 진입 전략 대시보드"
 APP_SUBTITLE = "117만 건 리뷰 기반 — 기능성 × 헤리티지 포지셔닝"
+
+# ─────────────────────────────────────────────────────────────
+# 브랜드별 연도별 매출 (단위: 억 원)
+# 룰루레몬 2025: 회계연도(2월~1월) 기준 성장흐름 유지 가정 추산치
+# ─────────────────────────────────────────────────────────────
+BRAND_SALES = {
+    "FILA":   {"2023": 3_676, "2024": 3_668, "2025": 3_863, "est": False},
+    "안다르": {"2023": 2_026, "2024": 2_368, "2025": 3_000, "est": False},
+    "젝시믹스": {"2023": 2_166, "2024": 2_508, "2025": 2_503, "est": False},
+    "룰루레몬": {"2023": 1_173, "2024": 1_567, "2025": 2_093, "est": True},
+}

@@ -30,6 +30,7 @@ from utils.data_loader import get_reviews
 from utils.session import init_session, get_filters, mark_page_visited
 from utils.exceptions import safe_block, empty_state
 from components.filters import render_sidebar_filters
+from components.page_header import render_page_intro
 
 st.set_page_config(
     page_title=f"{APP_TITLE} — 상품·고객 전략",
@@ -43,11 +44,17 @@ st.title("상품 및 고객 전략")
 st.caption("체형 적합성 · 할인율별 평점 · 고관여 인게이지먼트 · SKU 복잡도 · 컬러 빈도 · 사분면 분석")
 st.markdown(
     "<p style='font-size:12px; color:#888; margin:2px 0 2px;'>"
-    "📊 홈 &nbsp;›&nbsp; <strong>상품/고객 전략</strong> &nbsp;›&nbsp; "
+    "홈 &nbsp;›&nbsp; <strong>상품/고객 전략</strong> &nbsp;›&nbsp; "
     "BERTopic &nbsp;›&nbsp; ABSA &nbsp;›&nbsp; 포지셔닝</p>",
     unsafe_allow_html=True,
 )
 st.caption("홈의 브랜드별 KPI에서 파악한 점유율·평점 차이를 정형 데이터(체형·가격·인게이지먼트)로 심화 분석합니다.")
+
+render_page_intro(
+    "카테고리·가격·체형·할인율·인게이지먼트 단위로 침투 가능 영역을 도출하여 "
+    "FILA 의류 시장 진입의 1차 타겟 세그먼트를 좁힙니다.",
+    accent="#003087",
+)
 
 render_sidebar_filters()
 filters = get_filters()
@@ -227,41 +234,41 @@ def _quadrant_df() -> pd.DataFrame:
 st.subheader("체형별 만족도")
 st.caption("키·몸무게 구간별 평균 평점 — 사이즈 사각지대(White Space) 및 핵심 체형 타겟 탐색")
 
-sel_brand_body = st.selectbox(
-    "브랜드 선택",
-    options=active_brands,
-    format_func=lambda b: BRANDS[b]["label"],
-    key="body_brand_sel",
-)
 with safe_block("체형 Heatmap"):
-    body_df = _body_heatmap_df(sel_brand_body)
-    if body_df.empty:
-        empty_state("체형 데이터 없음", "user_height_group / user_weight_group 값 확인 필요")
-    else:
-        pivot = body_df.pivot_table(
-            index="몸무게 구간", columns="키 구간",
-            values="평균 평점", aggfunc="mean",
-        )
-        # 첫 번째 숫자 기준 정렬 ("139cm 이하", "140~144cm", "190cm 이상" 등 모든 형식 대응)
-        def _first_num(s: str) -> int:
-            m = re.search(r"\d+", s)
-            return int(m.group()) if m else 0
+    # 사이드바 선택 브랜드 기반 탭 생성
+    tabs = st.tabs([BRANDS[b]["label"] for b in active_brands])
+    
+    for tab, brand in zip(tabs, active_brands):
+        with tab:
+            body_df = _body_heatmap_df(brand)
+            if body_df.empty:
+                empty_state("체형 데이터 없음", "user_height_group / user_weight_group 값 확인 필요")
+            else:
+                pivot = body_df.pivot_table(
+                    index="몸무게 구간", columns="키 구간",
+                    values="평균 평점", aggfunc="mean",
+                )
+                
+                def _first_num(s: str) -> int:
+                    m = re.search(r"\d+", s)
+                    return int(m.group()) if m else 0
 
-        height_order = sorted(pivot.columns.tolist(), key=_first_num)
-        weight_order = sorted(pivot.index.tolist(), key=_first_num)
-        pivot = pivot.reindex(index=weight_order, columns=height_order)
-        fig_body = px.imshow(
-            pivot,
-            color_continuous_scale="RdYlGn",
-            zmin=1, zmax=5,
-            aspect="auto",
-            text_auto=".2f",
-            labels=dict(color="평균 평점", x="키 구간", y="몸무게 구간"),
-            title=f"{BRANDS[sel_brand_body]['label']} — 체형별 평균 평점",
-        )
-        fig_body.update_layout(height=420)
-        st.plotly_chart(fig_body, use_container_width=True)
-        st.caption(f"집계 기준: {len(body_df):,}개 체형 셀 / unknown 제외")
+                height_order = sorted(pivot.columns.tolist(), key=_first_num)
+                weight_order = sorted(pivot.index.tolist(), key=_first_num)
+                pivot = pivot.reindex(index=weight_order, columns=height_order)
+                
+                fig_body = px.imshow(
+                    pivot,
+                    color_continuous_scale="RdBu",
+                    zmin=1, zmax=5,
+                    aspect="auto",
+                    text_auto=".2f",
+                    labels=dict(color="평균 평점", x="키 구간", y="몸무게 구간"),
+                    title=f"{BRANDS[brand]['label']} — 체형별 평균 평점",
+                )
+                fig_body.update_layout(height=420)
+                st.plotly_chart(fig_body, use_container_width=True)
+                st.caption(f"집계 기준: 체형 정보가 포함된 리뷰 {body_df['리뷰 수'].sum():,}건 (unknown 제외)")
 
 st.divider()
 
@@ -312,6 +319,13 @@ with safe_block("인게이지먼트"):
     if eng_df.empty:
         empty_state("인게이지먼트 데이터 없음")
     else:
+        normalize_helpful = st.toggle(
+            "노출 기간 보정 (일평균)",
+            value=False,
+            help="helpful_count는 리뷰 노출 기간이 길수록 누적되므로 "
+                 "일수로 나눠 정규화한 일평균 값을 표시합니다.",
+            key="helpful_normalize",
+        )
         e1, e2, e3 = st.columns(3)
 
         with e1:
@@ -330,13 +344,6 @@ with safe_block("인게이지먼트"):
             st.plotly_chart(fig_e1, use_container_width=True)
 
         with e2:
-            normalize_helpful = st.toggle(
-                "노출 기간 보정 (일평균)",
-                value=False,
-                help="helpful_count는 리뷰 노출 기간이 길수록 누적되므로 "
-                     "일수로 나눠 정규화한 일평균 값을 표시합니다.",
-                key="helpful_normalize",
-            )
             metric_col = "일평균 도움이 돼요" if normalize_helpful else "평균 도움이 돼요"
             metric_title = (
                 "일평균 도움이 돼요 (helpful_count / days_exposed)"
@@ -457,6 +464,16 @@ st.caption(
     "— 브랜드별 주력 컬러 팔레트 파악 및 휠라 초기 컬러 전략 수립"
 )
 
+def _resolve_color_hex(name: str) -> str:
+    """정확 매칭 → 부분 문자열 매칭(베이스 컬러) → 기본 회색 순으로 hex 반환."""
+    if name in _KR_COLOR_HEX:
+        return _KR_COLOR_HEX[name]
+    for key in sorted(_KR_COLOR_HEX, key=len, reverse=True):
+        if key in name:
+            return _KR_COLOR_HEX[key]
+    return "#BBBBBB"
+
+
 with safe_block("컬러 Bar"):
     cf_cols = st.columns(len(active_brands))
     for col, brand in zip(cf_cols, active_brands):
@@ -466,9 +483,8 @@ with safe_block("컬러 Bar"):
                 empty_state(f"{BRANDS[brand]['label']} 데이터 없음")
             else:
                 sorted_df = cf_df.sort_values("언급 수")
-                # y축 라벨 앞 색상 동그라미 — HTML span 으로 컬러 칩 렌더링
                 y_labels = [
-                    f"<span style='color:{_KR_COLOR_HEX.get(c, '#999')}'>●</span> {c}"
+                    f"<span style='color:{_resolve_color_hex(c)}'>●</span> {c}"
                     for c in sorted_df["컬러"]
                 ]
                 # 막대는 브랜드 단색으로 통일 (가독성 우선)
@@ -534,33 +550,42 @@ st.divider()
 # 7. Action Recommendation — 상품 전략 요약
 # ─────────────────────────────────────────────────────────────
 st.subheader("Action Recommendation — 상품 전략 요약")
-st.caption("위 6개 분석 결과를 종합한 휠라 의류 진입 시 권장 액션")
+st.caption("BERTopic 신규 데이터(110M·22M·9.4K) + ABSA 6속성(29,070건) + 정형 분석 종합")
 
 action_cols = st.columns(3)
 actions = [
     {
-        "icon": "🎨",
-        "title": "초기 SKU — 무채색 중심",
+        "title": "1순위 방어선 — 사이즈 표 정확화 + 형태 안정성",
+        "color": "#C62828",
+        "desc": (
+            "**저평점 9,445건의 83%가 핏(46.4%) + 품질/내구성(36.8%)** "
+            "에 집중. Top 부정 토픽: 교환·작다·반품(3,195건) → 보풀·세탁·양말(1,155건). "
+            "**체형 사이즈 가이드 + 50회 세탁 후 형태 유지 인증**을 PDP·정책에 명시 → "
+            "초기 반품률·CS 부담 직접 절감"
+        ),
+        "evidence": "근거: dashboard_reviews_low.parquet 30토픽 + 저평점 aspect 분포",
+    },
+    {
+        "title": "초기 SKU — 무채색 60% + 디자인 강점 카드",
         "color": "#1A1A1A",
-        "desc": "컬러 빈도 분석 결과 4브랜드 공통 Top3는 **블랙·네이비·그레이** "
-                "→ 초기 라인업은 무채색 60% / 시즌 컬러 40%로 안전 마진 확보 후 확장",
-        "evidence": "근거: 컬러 빈도 분석 §5",
+        "desc": (
+            "컬러 빈도 4브랜드 공통 Top3: **블랙·네이비·그레이**. "
+            "FILA 디자인 P_ratio **+0.611로 4브랜드 1위** (룰루레몬 +0.519, 젝시믹스 +0.405). "
+            "**무채색 60% / 헤리티지 컬러 40%** 라인업으로 디자인 강점을 PDP 비주얼·"
+            "광고에서 전면 활용 — 차별화 첫 진입 카드"
+        ),
+        "evidence": "근거: 컬러 빈도 §5 + ABSA 디자인 P_ratio (phase_e 12,056건)",
     },
     {
-        "icon": "👟",
-        "title": "신발 헤리티지 → 의류 전이",
-        "color": "#003087",
-        "desc": "FILA 신발의 **레트로·디스럽터 라인 인지도**를 의류 컬렉션에 "
-                "공동 브랜딩 → 헤리티지 자산 활용한 차별화 진입",
-        "evidence": "근거: 사분면 분석 §6 (현재 의류 카테고리 진입 약함)",
-    },
-    {
-        "icon": "🧪",
-        "title": "기능성 소재 메시지 강화",
-        "color": "#2E7D32",
-        "desc": "룰루레몬·젝시믹스 강점은 **기능성·소재 신뢰** — 휠라는 "
-                "이 영역 약세 → R&D 메시지(쿨링·압박·통기성)를 PDP·광고 카피에 우선 노출",
-        "evidence": "근거: ABSA §4 (기능성/소재 약점 검증 시)",
+        "title": "중장기 — 기능성 발화 점유 회복",
+        "color": "#1565C0",
+        "desc": (
+            "BERTopic 발화 비중: 룰루레몬 기능성 **46.7%** vs FILA **9.7%** — "
+            "의류 기능성 담론 자체에 없음. ABSA에서도 기능성 +0.382로 4브랜드 최저. "
+            "**쿨링·압박·통기성 R&D 메시지**를 PDP·광고 카피·인플루언서 콘텐츠에 일관 노출, "
+            "리뷰 토픽 점유율 30% 도달이 12개월 KPI"
+        ),
+        "evidence": "근거: dashboard_reviews_22M.parquet 브랜드×aspect_label + ABSA §4",
     },
 ]
 for col, a in zip(action_cols, actions):
@@ -568,7 +593,6 @@ for col, a in zip(action_cols, actions):
         st.markdown(
             f"""<div style='border: 2px solid {a['color']}; border-radius: 8px;
             padding: 16px; height: 100%; background: {a['color']}11;'>
-                <div style='font-size: 24px;'>{a['icon']}</div>
                 <div style='color: {a['color']}; font-weight: 700; font-size: 15px; margin-top: 4px;'>
                     {a['title']}
                 </div>
