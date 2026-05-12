@@ -175,6 +175,18 @@ def render_brand_page(brand_key: str) -> None:
         brand_tokens = token_df["tokens_topic"] if "tokens_topic" in token_df.columns else pd.Series(dtype="object")
         _render_wordcloud(brand_tokens, color, label)
 
+    # ── 긍정/부정/카테고리 Top 키워드 (3패널) ────────────────
+    st.markdown(
+        "<div style='height:8px'></div><h5 style='margin:0;'>긍정 · 부정 · 카테고리별 Top 키워드</h5>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "별점 기준 분리 — 긍정(4–5점) / 부정(1–2점) / 카테고리(cat1)별 Top1 카테고리 키워드. "
+        "워드클라우드보다 전략 해석이 명확함"
+    )
+    with safe_block("Top 키워드 3패널"):
+        _render_keyword_trio(effective_brand, color, label)
+
 
 # ─────────────────────────────────────────────────────────────
 # 내부 차트 헬퍼
@@ -388,3 +400,83 @@ def _empty_fig(msg: str) -> go.Figure:
     )
     fig.update_layout(height=320, xaxis_visible=False, yaxis_visible=False)
     return fig
+
+
+def _tokens_to_counter(token_series: pd.Series) -> Counter:
+    """tokens_topic Series → 빈도 Counter (불용어·1글자·숫자 제외)."""
+    out: Counter = Counter()
+    for val in token_series.dropna().astype(str):
+        for w in val.split():
+            if len(w) > 1 and not w.isdigit() and w not in _EXTRA_STOPWORDS:
+                out[w] += 1
+    return out
+
+
+def _topn_bar(freq: Counter, color: str, title: str, n: int = 10) -> go.Figure:
+    """Counter → horizontal bar (Top n)."""
+    if not freq:
+        return _empty_fig(f"{title} 데이터 없음")
+    top = pd.DataFrame(
+        sorted(freq.items(), key=lambda x: x[1], reverse=True)[:n],
+        columns=["단어", "빈도"],
+    )
+    fig = px.bar(
+        top.sort_values("빈도"), x="빈도", y="단어",
+        orientation="h",
+        color_discrete_sequence=[color],
+        title=title,
+        labels={"빈도": "빈도", "단어": ""},
+    )
+    fig.update_layout(
+        height=320,
+        margin=dict(t=40, b=20, l=10, r=10),
+        showlegend=False,
+        yaxis=dict(autorange="reversed", tickfont=dict(size=11)),
+    )
+    return fig
+
+
+def _render_keyword_trio(brand: str, color: str, label: str) -> None:
+    """긍정 / 부정 / 카테고리 Top1 의 Top 10 키워드 막대 3패널."""
+    df = get_reviews(columns=("brand", "rating", "cat1", "tokens_topic"))
+    df = df[df["brand"] == brand]
+    if df.empty:
+        empty_state("키워드 분석용 데이터 없음")
+        return
+
+    pos = df[df["rating"] >= 4]["tokens_topic"]
+    neg = df[df["rating"] <= 2]["tokens_topic"]
+
+    top_cat = df["cat1"].value_counts().head(1)
+    top_cat_name = top_cat.index[0] if not top_cat.empty else None
+    cat_tokens = df[df["cat1"] == top_cat_name]["tokens_topic"] if top_cat_name else pd.Series(dtype="object")
+
+    freq_pos = _tokens_to_counter(pos)
+    freq_neg = _tokens_to_counter(neg)
+    freq_cat = _tokens_to_counter(cat_tokens)
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.plotly_chart(
+            _topn_bar(freq_pos, "#1565C0", f"긍정(4–5점) Top 10 — {len(pos):,}건"),
+            use_container_width=True,
+        )
+    with c2:
+        st.plotly_chart(
+            _topn_bar(freq_neg, "#C62828", f"부정(1–2점) Top 10 — {len(neg):,}건"),
+            use_container_width=True,
+        )
+    with c3:
+        cat_title = (
+            f"카테고리 ‘{top_cat_name}’ Top 10 — {len(cat_tokens):,}건"
+            if top_cat_name else "카테고리 데이터 없음"
+        )
+        st.plotly_chart(
+            _topn_bar(freq_cat, color, cat_title),
+            use_container_width=True,
+        )
+
+    st.caption(
+        f"긍정·부정은 별점 임계 기준(4↑/2↓), 카테고리는 {label}의 cat1 분포 1위 카테고리 기준. "
+        "불용어·1글자·숫자 제외. 더 깊은 속성 단위(P/N) 분리는 ABSA 페이지 참조"
+    )

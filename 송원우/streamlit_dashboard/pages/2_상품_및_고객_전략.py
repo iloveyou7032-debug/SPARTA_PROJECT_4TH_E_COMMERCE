@@ -558,10 +558,10 @@ actions = [
         "title": "1순위 방어선 — 사이즈 표 정확화 + 형태 안정성",
         "color": "#C62828",
         "desc": (
-            "**저평점 9,445건의 83%가 핏(46.4%) + 품질/내구성(36.8%)** "
-            "에 집중. Top 부정 토픽: 교환·작다·반품(3,195건) → 보풀·세탁·양말(1,155건). "
-            "**체형 사이즈 가이드 + 50회 세탁 후 형태 유지 인증**을 PDP·정책에 명시 → "
-            "초기 반품률·CS 부담 직접 절감"
+            "<strong>저평점 9,445건의 83%</strong>가 핏(46.4%) + 품질/내구성(36.8%)에 집중.<br/>"
+            "Top 부정 토픽: 교환·작다·반품(3,195건) → 보풀·세탁·양말(1,155건).<br/><br/>"
+            "<strong>체형 사이즈 가이드 + 50회 세탁 후 형태 유지 인증</strong>을 PDP·정책에 명시 "
+            "→ 초기 반품률·CS 부담 직접 절감"
         ),
         "evidence": "근거: dashboard_reviews_low.parquet 30토픽 + 저평점 aspect 분포",
     },
@@ -569,10 +569,11 @@ actions = [
         "title": "초기 SKU — 무채색 60% + 디자인 강점 카드",
         "color": "#1A1A1A",
         "desc": (
-            "컬러 빈도 4브랜드 공통 Top3: **블랙·네이비·그레이**. "
-            "FILA 디자인 P_ratio **+0.611로 4브랜드 1위** (룰루레몬 +0.519, 젝시믹스 +0.405). "
-            "**무채색 60% / 헤리티지 컬러 40%** 라인업으로 디자인 강점을 PDP 비주얼·"
-            "광고에서 전면 활용 — 차별화 첫 진입 카드"
+            "컬러 빈도 4브랜드 공통 Top3: <strong>블랙 · 네이비 · 그레이</strong>.<br/>"
+            "FILA 디자인 P_ratio <strong>+0.611로 4브랜드 1위</strong> "
+            "(룰루레몬 +0.519 / 젝시믹스 +0.405).<br/><br/>"
+            "<strong>무채색 60% · 헤리티지 컬러 40%</strong> 라인업으로 디자인 강점을 "
+            "PDP 비주얼·광고에서 전면 활용 — 차별화 첫 진입 카드"
         ),
         "evidence": "근거: 컬러 빈도 §5 + ABSA 디자인 P_ratio (phase_e 12,056건)",
     },
@@ -580,10 +581,12 @@ actions = [
         "title": "중장기 — 기능성 발화 점유 회복",
         "color": "#1565C0",
         "desc": (
-            "BERTopic 발화 비중: 룰루레몬 기능성 **46.7%** vs FILA **9.7%** — "
-            "의류 기능성 담론 자체에 없음. ABSA에서도 기능성 +0.382로 4브랜드 최저. "
-            "**쿨링·압박·통기성 R&D 메시지**를 PDP·광고 카피·인플루언서 콘텐츠에 일관 노출, "
-            "리뷰 토픽 점유율 30% 도달이 12개월 KPI"
+            "BERTopic 발화 비중: 룰루레몬 기능성 <strong>46.7%</strong> vs "
+            "FILA <strong>9.7%</strong> — 의류 기능성 담론 자체에 없음.<br/>"
+            "ABSA에서도 기능성 +0.382로 4브랜드 최저.<br/><br/>"
+            "<strong>쿨링 · 압박 · 통기성 R&amp;D 메시지</strong>를 "
+            "PDP · 광고 카피 · 인플루언서 콘텐츠에 일관 노출, "
+            "리뷰 토픽 점유율 <strong>30% 도달</strong>이 12개월 KPI"
         ),
         "evidence": "근거: dashboard_reviews_22M.parquet 브랜드×aspect_label + ABSA §4",
     },
@@ -596,10 +599,10 @@ for col, a in zip(action_cols, actions):
                 <div style='color: {a['color']}; font-weight: 700; font-size: 15px; margin-top: 4px;'>
                     {a['title']}
                 </div>
-                <p style='font-size: 13px; margin-top: 10px; color: #222; line-height: 1.55;'>
+                <p style='font-size: 14px; margin-top: 12px; color: #222; line-height: 1.7;'>
                     {a['desc']}
                 </p>
-                <div style='font-size: 11px; color: #777; margin-top: 8px; font-style: italic;'>
+                <div style='font-size: 11px; color: #777; margin-top: 10px; font-style: italic;'>
                     {a['evidence']}
                 </div>
             </div>""",

@@ -30,6 +30,10 @@ def render_positioning_map(
     show_quadrants: bool = True,
     target_position: tuple[float, float] | None = None,
     height: int = 640,
+    x_range: tuple[float, float] | None = None,
+    y_range: tuple[float, float] | None = None,
+    x_title: str = "기능성 (Functionality) →",
+    y_title: str = "브랜드 헤리티지 (Heritage) ↑",
 ) -> go.Figure:
     """포지셔닝 맵 메인 렌더러.
 
@@ -40,7 +44,11 @@ def render_positioning_map(
         show_ci: 신뢰구간 막대 표시
         show_quadrants: 사분면 분할선 표시
         target_position: 휠라 권장 위치 (예: (0.7, 0.7))
+        x_range / y_range: 축 범위 (None=기본 POSITIONING_AXIS_RANGE)
+        x_title / y_title: 축 라벨 — 산식 전환 시 의미 명확화용
     """
+    _x_range = x_range if x_range is not None else POSITIONING_AXIS_RANGE
+    _y_range = y_range if y_range is not None else POSITIONING_AXIS_RANGE
     fig = go.Figure()
 
     if pos_df.empty:
@@ -48,7 +56,7 @@ def render_positioning_map(
 
     # ── 1. 사분면 분할선 + 라벨 ────────────────────────────
     if show_quadrants:
-        _add_quadrants(fig)
+        _add_quadrants(fig, _x_range, _y_range)
 
     # ── 2. 브랜드별 신뢰구간 → 산점 ─────────────────────────
     skipped_brands: list[str] = []
@@ -119,7 +127,7 @@ def render_positioning_map(
             fig.add_trace(go.Scatter(
                 x=[tx], y=[ty], mode="markers+text",
                 marker=dict(symbol="x", size=18, color="#FFD700"),
-                text=["🎯 권장"], textposition="bottom center",
+                text=["권장"], textposition="bottom center",
                 textfont=dict(size=11, color="#FFD700"),
                 name="권장 위치", showlegend=True,
                 hovertemplate="<b>휠라 권장 포지셔닝</b><br>x=%{x:.2f}, y=%{y:.2f}<extra></extra>",
@@ -138,16 +146,16 @@ def render_positioning_map(
     fig.update_layout(
         title="브랜드 포지셔닝 맵 — 기능성 × 헤리티지",
         xaxis=dict(
-            title="기능성 (Functionality) →",
-            range=POSITIONING_AXIS_RANGE,
+            title=x_title,
+            range=list(_x_range),
             zeroline=False, gridcolor="#33334d",
-            tickformat=".1f",
+            tickformat=".2f",
         ),
         yaxis=dict(
-            title="브랜드 헤리티지 (Heritage) ↑",
-            range=POSITIONING_AXIS_RANGE,
+            title=y_title,
+            range=list(_y_range),
             zeroline=False, gridcolor="#33334d",
-            tickformat=".1f",
+            tickformat=".2f",
         ),
         height=height,
         plot_bgcolor="#0e1117",
@@ -162,17 +170,29 @@ def render_positioning_map(
     return fig
 
 
-def _add_quadrants(fig: go.Figure) -> None:
-    """사분면 가이드라인."""
-    fig.add_shape(type="line", x0=0.5, x1=0.5, y0=0, y1=1,
+def _add_quadrants(fig: go.Figure,
+                   x_range: tuple[float, float] = (0.0, 1.0),
+                   y_range: tuple[float, float] = (0.0, 1.0)) -> None:
+    """사분면 가이드라인 — 축 범위에 맞춰 분할 중심·라벨 위치 동적 계산."""
+    xlo, xhi = x_range
+    ylo, yhi = y_range
+    xmid = (xlo + xhi) / 2
+    ymid = (ylo + yhi) / 2
+    fig.add_shape(type="line", x0=xmid, x1=xmid, y0=ylo, y1=yhi,
                   line=dict(color="#555", width=1, dash="dash"))
-    fig.add_shape(type="line", x0=0, x1=1, y0=0.5, y1=0.5,
+    fig.add_shape(type="line", x0=xlo, x1=xhi, y0=ymid, y1=ymid,
                   line=dict(color="#555", width=1, dash="dash"))
+
+    qx_lo = xlo + (xhi - xlo) * 0.25
+    qx_hi = xlo + (xhi - xlo) * 0.75
+    qy_lo = ylo + (yhi - ylo) * 0.05
+    qy_hi = ylo + (yhi - ylo) * 0.95
+
     annotations = [
-        (0.25, 0.95, "II. Heritage Premium", "#999"),
-        (0.75, 0.95, "I. Holistic Leader",   "#FFD700"),
-        (0.25, 0.05, "III. Mass Functional", "#999"),
-        (0.75, 0.05, "IV. Function-First",   "#999"),
+        (qx_lo, qy_hi, "II. Heritage Premium", "#999"),
+        (qx_hi, qy_hi, "I. Holistic Leader",   "#FFD700"),
+        (qx_lo, qy_lo, "III. Mass Functional", "#999"),
+        (qx_hi, qy_lo, "IV. Function-First",   "#999"),
     ]
     for x, y, text, color in annotations:
         fig.add_annotation(

@@ -21,6 +21,9 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 
+import math
+import networkx as nx
+from itertools import combinations
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -221,16 +224,38 @@ def get_positioning() -> pd.DataFrame:
     return compute_positioning_from_absa()
 
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner="SNA 연산 중...")
+# ─────────────────────────────────────────────────────────────
+# [사전 정의] PMI 네트워크 고도화를 위한 사용자 사전 및 불용어
+# ─────────────────────────────────────────────────────────────
+ADVANCED_STOPWORDS = {
+    '네이버', '페이', '후기', '작성', '등록', '포인트', '아울렛', '로그인', '사이트', '구매', '제품', '상품', '주문', '배송',
+    '이번', '선택', '사용', '생각', '평소', '하다', '되다', '들르다', '들렀다', '특유', '햇빛', '조명', '따르다', '시선',
+    '만들다', '측면', '덕분', '신다', '더하다', '필수', '쟁이다', '그냥', '아웃렛', '와이프', '않다', '안다', '내다', '같다',
+    '울다', '그렇다', '이렇다', '어떻다', '저렇다', '사다', '입다', '순간', '구입', '종류', '달라다', '넘다', '부분', '알다',
+    '보이다', '중요', '보다', '기준', '올리다', '내리다', '찾다', '장난', '죽다', '생명', '덥다', '힘들다', '삐지다', '받다',
+    '적다', '착용', '닿다', '타사', '나오다', '넣다', '방식', '세일', '쎄일', '안파다', '배송비', '살다', '할인', '기분', '디다',
+    '감안', '안나오다', '안입다', '요즘', '요즈음', '역쉬', '역시', '기다', '몰다', '모르다', '돌리다', '바람', '특가', '행사',
+    '가리다', '리뷰', '안타다', '타다', '나가다', '쓰다', '딸아이', '아이', '아들', '남편', '아내', '부인', '재다', '동생',
+    '언니', '누나', '오빠', '형', '문의', '교환', '감수', '입지', '나다', '치다', '박다', '짙다', '베란다', '일주일', '두다',
+    '하이', '일반', '비하다', '비슷', '사람', '물어보다', '시즌', '날씨', '껴입다', '딱오다', '도움', '기부니', '차이', '돌다',
+    '품목', '시키다', '전체', '느끼다', '휠라', '젝시믹스', '안다르', '룰루레몬', '진짜', '너무', '정도', '많이', '조금', '약간'
+}
+
+# 💡 핵심: 의류 확장을 증명하기 위해 빈도수와 무관하게 차트에 무조건 살려둘 시드 단어들
+MUST_INCLUDE_SEEDS = {
+    # 1. 휠라 헤리티지 & 최신 트렌드 견인 (신발/핵심 라인업)
+    '인터런', '디스럽터', '에샤페', '레이', '페이토', '오크먼트', '코트디럭스', 
+    '메리제인', '글리오', '하레핀', '레인저코어', '테니스화',
+    
+    # 2. 일반 스포츠/캐주얼 의류 (기존 휠라가 가진 의류 인식)
+    '조거팬츠', '스웻', '아노락', '맨투맨', '트랙탑', '트랙팬츠', '바람막이', '티셔츠', '팬츠', '쇼츠',
+    
+    # 3. 🎯 핵심 타겟: 애슬레저 코어 아이템 (안다르/룰루레몬 파이 뺏기 용도)
+    '레깅스', '브라탑', '스포츠브라', '부츠컷', '부츠컷레깅스', '바이커쇼츠', '숏팬츠', '크롭티', '커버업'
+}
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner="PMI 네트워크(SNA) 연산 중...")
 def get_sna(top_n_words: int = 150) -> pd.DataFrame:
-    """reviews 형태소 토큰 → NetworkX 공출현 그래프 → 연결/매개 중심성 산출.
-
-    top_n_words: 브랜드별 고빈도 상위 N개 단어만 그래프에 포함 (연산 부하 제한).
-    반환 컬럼: keyword, brand, centrality(연결), betweenness_centrality(매개), frequency, polarity, topic_id
-    """
-    import networkx as nx
-    from itertools import combinations
-
     token_col = "tokens_topic"
     df = get_reviews(columns=("brand", token_col))
     if df.empty or token_col not in df.columns:
@@ -241,41 +266,46 @@ def get_sna(top_n_words: int = 150) -> pd.DataFrame:
 
     rows = []
     for brand, sub in df.groupby("brand", observed=True):
-        # Pass 1: 단어 빈도 집계 (불용어 제외)
-        word_freq: dict[str, int] = {}
+        total_docs = len(sub)
+        doc_freq: dict[str, int] = {}
+        
         for toks in sub[token_col]:
             if not isinstance(toks, (list, np.ndarray)):
                 continue
-            for w in toks:
-                if (isinstance(w, str) and len(w) >= 2
-                        and w not in _SNA_STOPWORDS):
-                    word_freq[w] = word_freq.get(w, 0) + 1
+            unique_toks = set(w for w in toks if isinstance(w, str) and len(w) >= 2 and w not in ADVANCED_STOPWORDS)
+            for w in unique_toks:
+                doc_freq[w] = doc_freq.get(w, 0) + 1
 
-        if not word_freq:
+        if not doc_freq:
             continue
 
-        top_words = set(sorted(word_freq, key=lambda x: -word_freq[x])[:top_n_words])
+        top_150 = sorted(doc_freq, key=lambda x: -doc_freq[x])[:top_n_words]
+        top_words = set(top_150) | {w for w in MUST_INCLUDE_SEEDS if w in doc_freq}
 
-        # Pass 2: 공출현 그래프 구축
+        co_freq = {}
+        for toks in sub[token_col]:
+            if not isinstance(toks, (list, np.ndarray)):
+                continue
+            words_in_review = list({w for w in toks if w in top_words})
+            for w1, w2 in combinations(words_in_review, 2):
+                pair = tuple(sorted([w1, w2]))
+                co_freq[pair] = co_freq.get(pair, 0) + 1
+
         G: nx.Graph = nx.Graph()
         for node in top_words:
             G.add_node(node)
 
-        for toks in sub[token_col]:
-            if not isinstance(toks, (list, np.ndarray)):
-                continue
-            words_in_review = list({w for w in toks if isinstance(w, str) and w in top_words})
-            for w1, w2 in combinations(words_in_review, 2):
-                if G.has_edge(w1, w2):
-                    G[w1][w2]["weight"] += 1
-                else:
-                    G.add_edge(w1, w2, weight=1)
+        for (w1, w2), co_count in co_freq.items():
+            if co_count >= 2:
+                pmi = math.log2((co_count * total_docs) / (doc_freq[w1] * doc_freq[w2]))
+                if pmi > 0:
+                    G.add_edge(w1, w2, weight=pmi, distance=1.0/pmi, co_occur=co_count)
 
         if G.number_of_nodes() == 0:
             continue
 
         degree = nx.degree_centrality(G)
-        betweenness = nx.betweenness_centrality(G, weight="weight", normalized=True)
+        betweenness = nx.betweenness_centrality(G, weight="distance", normalized=True)
 
         for word in G.nodes():
             rows.append({
@@ -283,7 +313,7 @@ def get_sna(top_n_words: int = 150) -> pd.DataFrame:
                 "brand":                  brand,
                 "centrality":             round(degree.get(word, 0.0), 4),
                 "betweenness_centrality": round(betweenness.get(word, 0.0), 4),
-                "frequency":              word_freq.get(word, 0),
+                "frequency":              doc_freq.get(word, 0),
                 "polarity":               0.0,
                 "topic_id":               -1,
             })
@@ -292,6 +322,99 @@ def get_sna(top_n_words: int = 150) -> pd.DataFrame:
         return _generate_dummy_sna()
 
     return pd.DataFrame(rows)
+
+def _generate_dummy_sna() -> pd.DataFrame:
+    """더미 데이터 생성 시 KeyError 방지를 위해 betweenness_centrality 컬럼 추가"""
+    rng = np.random.default_rng(DUMMY_SEED + 3)
+    keywords_pool = [
+        "쿠션", "착용감", "쫀쫀", "통기성", "보정", "허리", "재구매", "추천", "디자인",
+        "색감", "가성비", "사이즈", "기능성", "신축성", "발편안", "운동",
+    ]
+    rows = []
+    for b in BRAND_ORDER:
+        for kw in keywords_pool:
+            rows.append({
+                "keyword":    kw,
+                "brand":      b,
+                "centrality": float(rng.uniform(0.05, 0.95)),
+                "betweenness_centrality": float(rng.uniform(0.01, 0.5)), # 💡 누락되었던 컬럼 추가 완료
+                "topic_id":   int(rng.integers(0, 8)),
+                "frequency":  int(rng.integers(50, 5000)),
+                "polarity":   float(rng.uniform(-0.4, 0.9)),
+            })
+    return pd.DataFrame(rows)
+
+# @st.cache_data(ttl=CACHE_TTL, show_spinner="SNA 연산 중...")
+# def get_sna(top_n_words: int = 150) -> pd.DataFrame:
+#     """reviews 형태소 토큰 → NetworkX 공출현 그래프 → 연결/매개 중심성 산출.
+
+#     top_n_words: 브랜드별 고빈도 상위 N개 단어만 그래프에 포함 (연산 부하 제한).
+#     반환 컬럼: keyword, brand, centrality(연결), betweenness_centrality(매개), frequency, polarity, topic_id
+#     """
+#     import networkx as nx
+#     from itertools import combinations
+
+#     token_col = "tokens_topic"
+#     df = get_reviews(columns=("brand", token_col))
+#     if df.empty or token_col not in df.columns:
+#         token_col = "tokens"
+#         df = get_reviews(columns=("brand", token_col))
+#     if df.empty or token_col not in df.columns:
+#         return _generate_dummy_sna()
+
+#     rows = []
+#     for brand, sub in df.groupby("brand", observed=True):
+#         # Pass 1: 단어 빈도 집계 (불용어 제외)
+#         word_freq: dict[str, int] = {}
+#         for toks in sub[token_col]:
+#             if not isinstance(toks, (list, np.ndarray)):
+#                 continue
+#             for w in toks:
+#                 if (isinstance(w, str) and len(w) >= 2
+#                         and w not in _SNA_STOPWORDS):
+#                     word_freq[w] = word_freq.get(w, 0) + 1
+
+#         if not word_freq:
+#             continue
+
+#         top_words = set(sorted(word_freq, key=lambda x: -word_freq[x])[:top_n_words])
+
+#         # Pass 2: 공출현 그래프 구축
+#         G: nx.Graph = nx.Graph()
+#         for node in top_words:
+#             G.add_node(node)
+
+#         for toks in sub[token_col]:
+#             if not isinstance(toks, (list, np.ndarray)):
+#                 continue
+#             words_in_review = list({w for w in toks if isinstance(w, str) and w in top_words})
+#             for w1, w2 in combinations(words_in_review, 2):
+#                 if G.has_edge(w1, w2):
+#                     G[w1][w2]["weight"] += 1
+#                 else:
+#                     G.add_edge(w1, w2, weight=1)
+
+#         if G.number_of_nodes() == 0:
+#             continue
+
+#         degree = nx.degree_centrality(G)
+#         betweenness = nx.betweenness_centrality(G, weight="weight", normalized=True)
+
+#         for word in G.nodes():
+#             rows.append({
+#                 "keyword":                word,
+#                 "brand":                  brand,
+#                 "centrality":             round(degree.get(word, 0.0), 4),
+#                 "betweenness_centrality": round(betweenness.get(word, 0.0), 4),
+#                 "frequency":              word_freq.get(word, 0),
+#                 "polarity":               0.0,
+#                 "topic_id":               -1,
+#             })
+
+#     if not rows:
+#         return _generate_dummy_sna()
+
+#     return pd.DataFrame(rows)
 
 
 # ═════════════════════════════════════════════════════════════
@@ -574,26 +697,6 @@ def _generate_dummy_absa() -> pd.DataFrame:
         out[aspect] = pd.Categorical(labels, categories=SENTIMENT_LABELS)
         out[f"{aspect}_confidence"] = rng.uniform(0.55, 0.98, n).astype("float32")
     return pd.DataFrame(out)
-
-
-def _generate_dummy_sna() -> pd.DataFrame:
-    rng = np.random.default_rng(DUMMY_SEED + 3)
-    keywords_pool = [
-        "쿠션", "착용감", "쫀쫀", "통기성", "보정", "허리", "재구매", "추천", "디자인",
-        "색감", "가성비", "사이즈", "기능성", "신축성", "발편안", "운동",
-    ]
-    rows = []
-    for b in BRAND_ORDER:
-        for kw in keywords_pool:
-            rows.append({
-                "keyword":    kw,
-                "brand":      b,
-                "centrality": float(rng.uniform(0.05, 0.95)),
-                "topic_id":   int(rng.integers(0, 8)),
-                "frequency":  int(rng.integers(50, 5000)),
-                "polarity":   float(rng.uniform(-0.4, 0.9)),
-            })
-    return pd.DataFrame(rows)
 
 
 # ═════════════════════════════════════════════════════════════
