@@ -139,7 +139,7 @@ def keyword_centrality_bar(sna_df: pd.DataFrame, brand: str, top_n: int = 15) ->
         sub.sort_values("centrality"),
         x="centrality", y="keyword", orientation="h",
         color="polarity",
-        color_continuous_scale="RdYlGn",
+        color_continuous_scale="RdBu",
         range_color=[-1, 1],
         labels={"centrality": "중심성", "keyword": "키워드", "polarity": "감성"},
         title=f"{brand} 핵심 키워드 (상위 {top_n})",

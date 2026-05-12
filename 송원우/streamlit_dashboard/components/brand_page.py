@@ -22,7 +22,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from config import BRANDS, BRAND_ORDER
+from config import BRANDS, BRAND_ORDER, BRAND_SALES
 from utils.data_loader import get_reviews, get_tokens, apply_filters, filters_to_hash
 from utils.session import init_session, get_filters, mark_page_visited
 from utils.exceptions import safe_block, empty_state
@@ -44,13 +44,6 @@ _FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
 ]
-# 가짜 매출(억 원) — 외부 데이터 도착 전 더미
-_DUMMY_SALES = {
-    "FILA":   [312, 428, 563],
-    "안다르": [890, 1_240, 1_650],
-    "젝시믹스": [710, 980, 1_290],
-    "룰루레몬": [1_100, 1_450, 1_870],
-}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -139,8 +132,10 @@ def render_brand_page(brand_key: str) -> None:
     col_a, col_b = st.columns(2)
     with col_a:
         with safe_block("매출 추이"):
+            # 매출 차트는 pills로 선택된 effective_brand 기준으로 그려야 함
+            # (이전: 호출 시 인자 brand_key로 고정 → FILA 매출만 표시되는 버그)
             st.plotly_chart(
-                _sales_placeholder(brand_key, color),
+                _sales_placeholder(effective_brand, color),
                 use_container_width=True,
             )
     with col_b:
@@ -172,7 +167,7 @@ def render_brand_page(brand_key: str) -> None:
     # ── 워드클라우드 (full width) ──────────────────────────────
     st.subheader("리뷰 주요 키워드")
     st.caption(
-        "preprocessed_bertopic.parquet의 `tokens_topic` 컬럼 사용 — "
+        "preprocessed_absa.parquet의 `tokens_topic` 컬럼 사용 — "
         "Kiwi 형태소 분석(사용자/불용/정규화 사전) 적용된 어휘"
     )
     with safe_block("워드클라우드"):
@@ -185,23 +180,29 @@ def render_brand_page(brand_key: str) -> None:
 # 내부 차트 헬퍼
 # ─────────────────────────────────────────────────────────────
 def _sales_placeholder(brand_key: str, color: str) -> go.Figure:
-    years  = [2022, 2023, 2024]
-    sales  = _DUMMY_SALES.get(brand_key, [500, 700, 900])
+    s = BRAND_SALES.get(brand_key, {})
+    years = [2023, 2024, 2025]
+    vals  = [s.get("2023", 0), s.get("2024", 0), s.get("2025", 0)]
+    x_labels = [str(y) for y in years]
+    if s.get("est") and x_labels:
+        x_labels[-1] = "2025*"
+
     fig = go.Figure()
     fig.add_bar(
-        x=years, y=sales,
+        x=x_labels, y=vals,
         marker_color=color,
-        hovertemplate="%{x}년: %{y}억 원<extra></extra>",
+        hovertemplate="%{x}년: %{y:,}억 원<extra></extra>",
     )
-    fig.add_annotation(
-        text="더미 데이터 — 외부 매출 자료 연결 필요",
-        xref="paper", yref="paper", x=0.5, y=1.05,
-        showarrow=False, font=dict(size=11, color="#FF9800"),
-    )
+    if s.get("est"):
+        fig.add_annotation(
+            text="* 2025 추산치 (회계연도 기준 성장흐름 유지 가정)",
+            xref="paper", yref="paper", x=0.5, y=1.07,
+            showarrow=False, font=dict(size=11, color="#888"),
+        )
     fig.update_layout(
         title="연도별 매출액 추이 (억 원)",
         height=340,
-        xaxis=dict(tickvals=years),
+        xaxis=dict(tickvals=x_labels),
         yaxis_title="매출액 (억 원)",
         showlegend=False,
     )
@@ -267,35 +268,69 @@ def _category_bar(df: pd.DataFrame, color: str, label: str) -> go.Figure:
 def _price_histogram(df: pd.DataFrame, color: str, label: str) -> go.Figure:
     if df.empty or "discount_price" not in df.columns:
         return _empty_fig("가격 데이터 없음")
+        
     prices = df["discount_price"].dropna()
     prices = prices[prices > 0]
+    
     if prices.empty:
         return _empty_fig("가격 > 0 데이터 없음")
+        
     cap = prices.quantile(0.97)
     prices = prices[prices <= cap]
+    
+    # 1. 일단 기본 차트를 그립니다.
     fig = px.histogram(
-        prices, x=prices,
+        prices, 
+        x=prices,
         nbins=40,
-        labels={"x": "할인가 (원)"},
-        title="상품 가격 분포 (discount_price, 상위 3% 제외)",
         color_discrete_sequence=[color],
     )
-    fig.update_layout(height=340, bargap=0.05)
+    
+    # 💡 2. 확실한 강제 덮어쓰기: 제목, Y축, 레이아웃 일괄 업데이트
+    fig.update_layout(
+        title="상품 실구매가 분포 (상위 3% 이상치 제외)", # 제목 완벽 한글화
+        yaxis_title="상품 수 (건)",                   # Y축 한글화
+        height=340, 
+        bargap=0.05
+    )
+    
+    # 💡 3. X축 이름 강제 덮어쓰기 (discount_price를 무시하고 적용됨)
+    fig.update_xaxes(title_text="실구매가 (원)")
+    
     return fig
 
 
-# 워드클라우드 추가 불용어 — 형태소 분석 후에도 남는 일반 평가 어휘
+# 워드클라우드 추가 불용어 — 형태소 분석 후에도 남는 일반 평가 어휘 완벽 필터링
 _EXTRA_STOPWORDS = {
-    "좋다", "좋은", "좋아", "좋네", "좋고", "좋았", "좋아요", "괜찮다", "괜찮", "괜찮아",
-    "있다", "있는", "있어", "있고", "없다", "없는", "없어",
-    "같다", "같아", "같은", "같이", "이다", "되다", "되는", "된다",
-    "그냥", "정말", "진짜", "너무", "조금", "약간", "엄청", "완전", "되게", "매우", "많이",
-    "사다", "사서", "구매", "주문", "받다", "받았", "받은",
-    "생각", "느낌", "기분", "그런", "이런", "저런", "어떤",
-    "하다", "하는", "한", "해서", "해요", "합니다", "했어요", "했다",
-    "그리고", "근데", "하지만", "아주", "역시", "딱",
+    # 1. 문법적 뼈대 및 의미 없는 동사/형용사
+    "하다", "있다", "없다", "같다", "이다", "되다", "나다", "그렇다", "가다", "오다", "다니다", "들다", "받다", "사다", "주다", "맞추다",
     "것", "수", "때", "거", "게", "걸", "더", "안", "못",
+
+    # 2. 강도 부사 및 일반 부사 (워드클라우드에서 덩치만 키우는 주범)
+    "너무", "진짜", "정말", "그냥", "조금", "약간", "엄청", "완전", "되게", "매우", "많이", "아주", "역시", "딱", "제일", "가장", "자주", "항상",
+
+    # 3. 리뷰/플랫폼 관련 기본 단어 및 일반 명사
+    "구매", "주문", "배송", "후기", "리뷰", "네이버페이", "작성", "제품", "상품", "생각", "마음", "느낌", "부분", "정도", "처음", "이번", "하나", 
+
+    # 4. 뻔한 '긍정/평가' 어휘 (현재 워드클라우드를 집어삼킨 거인들)
+    "좋다", "예쁘다", "편하다", "잘맞다", "어울리다", "마음에들다", "만족", "최고", "이쁘다", "가볍다", "부드럽다", "괜찮다", "귀엽다", "추천", "감사",
+
+    # 5. 1차원적 카테고리 명사 및 상태 (이걸 지워야 진짜 '특징'이 보입니다)
+    "사이즈", "신발", "운동화", "디자인", "색상", "컬러", "색감", "정사이즈", "착용감", "착용",
+    "크다", "작다", "맞다", "입다", "신다", "길다", "짧다",
+
+    # 6. 브랜드명
+    "휠라", "룰루레몬", "젝시믹스", "안다르"
 }
+
+# (참고) 혹시 토큰화 방식에 따라 활용형이 남아있을 수 있으므로 기존 파생형 일부 유지
+_EXTRA_STOPWORDS.update({
+    "좋은", "좋아", "좋네", "좋고", "좋았", "좋아요", "괜찮아", 
+    "있는", "있어", "있고", "없는", "없어", "같아", "같은", "같이", "되는", "된다",
+    "사서", "받았", "받은", "그런", "이런", "저런", "어떤",
+    "하는", "한", "해서", "해요", "합니다", "했어요", "했다",
+    "그리고", "근데", "하지만"
+})
 
 
 def _render_wordcloud(token_series: pd.Series, color: str, label: str) -> None:

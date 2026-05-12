@@ -26,6 +26,7 @@ from utils.exceptions import safe_block, warn_using_dummy, empty_state
 from components.filters import render_sidebar_filters
 from components.positioning_map import render_positioning_map
 from components.charts import keyword_centrality_bar
+from components.page_header import render_page_intro
 
 
 st.set_page_config(page_title=f"{APP_TITLE} — 포지셔닝", page_icon=None, **PAGE_LAYOUT)
@@ -36,14 +37,17 @@ st.title("전략 포지셔닝")
 st.caption("최종 산출 — 휠라의 의류 시장 진입 좌표")
 st.markdown(
     "<p style='font-size:12px; color:#888; margin:2px 0 2px;'>"
-    "📊 홈 &nbsp;›&nbsp; 상품/고객 전략 &nbsp;›&nbsp; BERTopic &nbsp;›&nbsp; "
+    "홈 &nbsp;›&nbsp; 상품/고객 전략 &nbsp;›&nbsp; BERTopic &nbsp;›&nbsp; "
     "ABSA &nbsp;›&nbsp; <strong>포지셔닝</strong></p>",
     unsafe_allow_html=True,
 )
 st.caption("ABSA 속성 점수를 기능성 × 헤리티지 2축으로 압축하여 FILA의 의류 시장 진입 좌표를 확정합니다.")
 
-if not PATHS["positioning"].exists():
-    warn_using_dummy("포지셔닝 좌표 (ABSA에서 즉석 산출 중)")
+render_page_intro(
+    "기능성 × 헤리티지 2축 좌표와 신발↔의류 키워드 네트워크(PMI) 분석으로 "
+    "FILA의 진입 좌표와 White Space 전략 옵션(A/B/C)을 결정합니다.",
+    accent="#004B87",
+)
 
 render_sidebar_filters()
 
@@ -61,10 +65,10 @@ if pos.empty:
 st.subheader("휠라 권장 포지셔닝 시뮬레이터")
 ctl = st.columns([1, 1, 2])
 with ctl[0]:
-    target_x = st.slider("목표 기능성", 0.0, 1.0, 0.70, 0.05,
+    target_x = st.slider("목표 기능성", 0.0, 1.0, 0.95, 0.01,
                          help="휠라가 도달해야 할 기능성 점수")
 with ctl[1]:
-    target_y = st.slider("목표 헤리티지", 0.0, 1.0, 0.75, 0.05,
+    target_y = st.slider("목표 헤리티지", 0.0, 1.0, 0.95, 0.01,
                          help="신발 헤리티지를 의류로 전이한 후 목표 점수")
 with ctl[2]:
     show_ci = st.toggle("신뢰구간 표시", value=True)
@@ -118,7 +122,7 @@ df_view["헤리티지"] = df_view["헤리티지"].apply(_fmt_score)
 st.dataframe(df_view, use_container_width=True, hide_index=True)
 na_brands = pos[pos["x_function"].isna() | pos["y_heritage"].isna()]["brand"].tolist()
 if na_brands:
-    st.caption(f"⚠ 산출 불가 브랜드: {', '.join(na_brands)} — 해당 속성에서 ABSA 결과 부재")
+    st.caption(f"산출 불가 브랜드: {', '.join(na_brands)} — 해당 속성에서 ABSA 결과 부재")
 
 st.divider()
 
@@ -145,7 +149,7 @@ st.divider()
 st.subheader("FILA 신발 → 의류 연결 분석 (PMI 기반 키워드 네트워크)")
 st.caption(
     "FILA 리뷰 토큰에서 PMI(점별 상호정보량) 기반 의미 있는 단어쌍 추출 → "
-    "연결 중심성(허브 단어)·매개 중심성(브릿지 단어) 계산"
+    "연결 중심성(얼마나 많은 단어와 연결되는지)·매개 중심성(서로 다른 단어 그룹을 이어주는 정도) 계산"
 )
 
 # 신발/의류 시드 단어
@@ -157,6 +161,15 @@ _APPAREL_SEEDS = {
     "레깅스", "티셔츠", "바지", "상의", "하의", "셔츠", "반팔", "긴팔",
     "조거", "재킷", "니트", "기모", "맨투맨", "원피스", "스커트", "반바지",
 }
+_PMI_STOPWORDS: frozenset[str] = frozenset([
+    "있다", "없다", "좋다", "같다", "하다", "이다", "되다", "많다",
+    "너무", "진짜", "정말", "그냥", "조금", "약간", "엄청", "완전", "매우", "많이",
+    "느낌", "생각", "마음", "이거", "저거", "그런", "이런", "저런", "어떤",
+    "것", "수", "때", "거", "게", "걸", "더", "안", "못", "또", "다", "잘",
+    "좋아", "좋아요", "있어", "없어", "같아", "합니다", "됩니다",
+    "구매", "주문", "배송", "포장", "리뷰", "상품", "제품",
+    "이번", "이후", "기존", "받다", "오다", "보다", "주다",
+])
 
 
 @st.cache_data(ttl=CACHE_TTL)
@@ -176,6 +189,7 @@ def _compute_pmi_centrality(
     vocab = {
         w for w, c in word_counts.most_common(top_vocab)
         if len(w) > 1 and not w.isdigit() and c >= min_pair_count
+        and w not in _PMI_STOPWORDS
     }
 
     cooc: Counter = Counter()
@@ -215,11 +229,11 @@ def _compute_pmi_centrality(
 
     rows = [
         {
-            "키워드":    node,
+            "키워드":   node,
             "연결 중심성": round(degree_c.get(node, 0), 4),
             "매개 중심성": round(between_c.get(node, 0), 4),
-            "빈도":      word_counts.get(node, 0),
-            "카테고리":   _cat(node),
+            "빈도":     word_counts.get(node, 0),
+            "카테고리":  _cat(node),
         }
         for node in G.nodes()
     ]
@@ -266,14 +280,15 @@ else:
             orientation="h",
             color="카테고리",
             color_discrete_map=_CAT_COLOR,
-            title="연결 중심성 Top 15 — 허브 키워드",
-            labels={"연결 중심성": "연결 중심성 (Degree)", "키워드": ""},
+            title="연결 중심성 Top 15",
+            labels={"연결 중심성": "연결 중심성", "키워드": ""},
             hover_data={"빈도": True, "카테고리": True},
         )
         fig_deg.update_layout(height=480, showlegend=True,
                               legend=dict(orientation="h", y=-0.15))
         st.plotly_chart(fig_deg, use_container_width=True)
-        st.caption("가장 많은 단어와 연결된 허브 키워드 — 브랜드 경험의 중심축")
+        st.caption("연결 중심성: 한 단어가 얼마나 많은 다른 단어와 연결되어 있는지 — 수치가 높을수록 브랜드 경험의 중심 단어")
+        st.caption("※ 가장 많은 단어들과 짝지어져서 언급된 핵심 단어입니다.")
 
     with col_bet:
         top_bet = pmi_df.nlargest(15, "매개 중심성").sort_values("매개 중심성")
@@ -282,14 +297,15 @@ else:
             orientation="h",
             color="카테고리",
             color_discrete_map=_CAT_COLOR,
-            title="매개 중심성 Top 15 — 브릿지 키워드",
-            labels={"매개 중심성": "매개 중심성 (Betweenness)", "키워드": ""},
+            title="매개 중심성 Top 15",
+            labels={"매개 중심성": "매개 중심성", "키워드": ""},
             hover_data={"빈도": True, "카테고리": True},
         )
         fig_bet.update_layout(height=480, showlegend=True,
                               legend=dict(orientation="h", y=-0.15))
         st.plotly_chart(fig_bet, use_container_width=True)
-        st.caption("신발↔의류 군집 사이를 이어주는 가교 키워드 — 브랜드 확장 전환점")
+        st.caption("매개 중심성: 신발 단어 그룹과 의류 단어 그룹 사이를 얼마나 잘 이어주는지 — 브랜드 확장의 전환점이 되는 단어")
+        st.caption("※ 서로 다른 주제나 흩어진 단어들을 중간에서 이어주는 다리 역할의 단어입니다.")
 
     # 연결 중심성 vs 매개 중심성 산점도
     st.subheader("키워드 포지셔닝 — 연결 중심성 × 매개 중심성")
@@ -301,8 +317,8 @@ else:
         text="키워드",
         hover_data={"빈도": True, "카테고리": True},
         labels={
-            "연결 중심성": "연결 중심성 (허브 강도)",
-            "매개 중심성": "매개 중심성 (브릿지 강도)",
+            "연결 중심성": "연결 중심성 (많이 연결된 단어)",
+            "매개 중심성": "매개 중심성 (다리 역할 단어)",
         },
         title="키워드 네트워크 포지셔닝 맵 (빈도 상위 80개)",
         size_max=40,
@@ -311,7 +327,7 @@ else:
     fig_scatter.update_layout(height=560)
     st.plotly_chart(fig_scatter, use_container_width=True)
     st.caption(
-        "우상단: 허브이자 브릿지 — 신발·의류 양쪽 네트워크를 연결하는 전략적 전환 키워드"
+        "우상단: 허브이자 가교 — 신발·의류 양쪽 네트워크를 연결하는 전략적 전환 키워드"
     )
 
     with st.expander("PMI 네트워크 데이터 전체 보기"):
@@ -325,28 +341,60 @@ st.divider()
 
 # ── White Space 전략 카드 ──────────────────────────────────
 st.subheader("White Space — 휠라 전략 옵션")
+st.caption(
+    "기준점: FILA 현 좌표 **(0.91, 0.98)** — 헤리티지 1위, 기능성 4위. "
+    "룰루레몬 (0.96, 0.95) / 젝시믹스 (0.94, 0.92) / 안다르 (0.93, 0.95). "
+    "단, 좌표는 '언급 시 긍정 강도' — **발화량 자체(BERTopic)**는 FILA 기능성 9.7% vs 룰루레몬 46.7%로 4배 차이"
+)
 opt = st.columns(3)
 strategies = [
     {
-        "title": "Option A. 헤리티지 프리미엄",
+        "title": "Option A. Heritage Defender (수성형)",
         "color": "#7B68EE",
-        "x": 0.45, "y": 0.85,
-        "desc": "신발 헤리티지를 그대로 의류로 전이. 디자인·브랜드 충성도에서 룰루레몬과 직접 경쟁.",
-        "risk": "기능성 약점 미해결 시 재구매율 저하",
+        "x": 0.94, "y": 0.98,
+        "delta": "Δx +0.03 / Δy 0",
+        "desc": (
+            "현재 **헤리티지 1위(y=0.98)** 자산을 그대로 유지하면서, "
+            "기능성 좌표를 룰루레몬과의 격차(Δx 0.054)의 절반인 +0.03만 좁힌다. "
+            "디자인 P_ratio +0.611(4브랜드 1위) + 발화 19.5%(룰루레몬 6.1%의 3배) 활용 — "
+            "**디자인·헤리티지 컬렉션 + PDP 기능 메시지 보강**으로 R&D 부담 없이 단기 실행"
+        ),
+        "risk": (
+            "기능성 발화량 9.7% 미해결. 룰루레몬이 헤리티지로 따라오면 1위 흔들림. "
+            "차별화는 단기 유지, 천장 존재"
+        ),
     },
     {
-        "title": "Option B. Holistic Leader",
+        "title": "Option B. Holistic Leader (정상 도전)",
         "color": "#E0561A",
-        "x": 0.70, "y": 0.75,
-        "desc": "기능성·헤리티지 동시 강화. 룰루레몬과 정면 경쟁 (현실적 목표).",
-        "risk": "기능성 R&D 투자 필요 — 1~2년 시간 소요",
+        "x": 0.96, "y": 0.97,
+        "delta": "Δx +0.05 / Δy −0.01",
+        "desc": (
+            "**룰루레몬의 기능성 좌표 0.962를 직접 매치**하면서 헤리티지도 0.97 유지 — "
+            "유일하게 좌표상 4브랜드 우상단을 동시 점유. "
+            "BERTopic 기능성 **발화 점유율 9.7% → 30%** 12개월 KPI 설정, "
+            "쿨링·압박·통기성 R&D + 광고·인플루언서 일관 노출 + 헤리티지 디자인 분리 유지"
+        ),
+        "risk": (
+            "R&D + 마케팅 동시 투자로 CAPEX·OPEX 가장 큼. "
+            "12~24개월 회수, 메시지 일관성 실패 시 두 축 동시 약화 위험"
+        ),
     },
     {
-        "title": "Option C. 기능 우선 진입",
+        "title": "Option C. Function Catch-up (기능 추격)",
         "color": "#2E7D32",
-        "x": 0.80, "y": 0.40,
-        "desc": "젝시믹스/안다르 시장에 가격·기능 경쟁으로 진입. 빠른 시장 점유 확대.",
-        "risk": "헤리티지 자산 활용 부족 — 차별화 약함",
+        "x": 0.95, "y": 0.93,
+        "delta": "Δx +0.04 / Δy −0.05",
+        "desc": (
+            "기능성 좌표를 안다르·젝시믹스 수준(0.93~0.94) 위로 끌어올리되 "
+            "헤리티지는 안다르 수준(0.95)으로 의도적 양보. "
+            "**저평점 9.4K의 핏 46.4% + 품질 36.8% = 83% 원인 즉시 차단** — "
+            "사이즈 가이드 + 50회 세탁 후 형태 인증 + 기능성 라벨링으로 단기 반품률·CS 부담 절감"
+        ),
+        "risk": (
+            "디자인 +0.611·헤리티지 0.98 활용 부족 → 차별화 약화. "
+            "기능성 경쟁(룰루레몬·젝시믹스) 영역 직접 진입 — 마진율 압박"
+        ),
     },
 ]
 for col, s in zip(opt, strategies):
@@ -355,9 +403,30 @@ for col, s in zip(opt, strategies):
             f"""<div style='border: 2px solid {s['color']}; border-radius:8px;
             padding:16px; height:100%; background:{s['color']}11;'>
                 <div style='color:{s['color']}; font-weight:700; font-size:15px;'>{s['title']}</div>
-                <div style='font-size:11px; color:#666; margin-top:4px;'>좌표 ({s['x']:.2f}, {s['y']:.2f})</div>
+                <div style='font-size:11px; color:#666; margin-top:4px;'>목표 좌표 ({s['x']:.2f}, {s['y']:.2f}) · {s['delta']}</div>
                 <p style='font-size:13px; margin-top:10px; color:#222;'>{s['desc']}</p>
                 <div style='font-size:11px; color:#C62828; margin-top:8px;'>리스크: {s['risk']}</div>
             </div>""",
             unsafe_allow_html=True,
         )
+
+st.markdown("---")
+st.markdown(
+    "<div style='background:#F0F4FF; border-left:4px solid #003087; "
+    "padding:14px 18px; border-radius:0 6px 6px 0;'>"
+    "<strong>권장 진입 경로 — 12~24개월 3-Phase 로드맵</strong><br/><br/>"
+    "<strong>Phase 1 (0–6개월) · Option C 단기 액션</strong>: "
+    "사이즈표 정확화 + 50회 세탁 후 형태 인증 + 기능성 라벨링 — "
+    "저평점 핏+품질 83% 즉시 차단, 반품률·CS 부담 단기 절감. "
+    "지표: 1~2점 비율, 반품률, CS 인입 건수.<br/><br/>"
+    "<strong>Phase 2 (6–18개월) · Option A 헤리티지 컬렉션</strong>: "
+    "디자인 +0.611·발화 19.5% 강점 자산화 — 신발 디자인 헤리티지 의류 컬렉션 출시 + "
+    "헤리티지 마케팅으로 좌표 (0.94, 0.98) 도달. "
+    "지표: 디자인 P_ratio, 헤리티지 토픽 점유율, 컬렉션 매출.<br/><br/>"
+    "<strong>Phase 3 (18–24개월) · Option B Holistic 전환</strong>: "
+    "기능성 R&D 출시 + 광고·인플루언서 일관 노출 — "
+    "BERTopic 기능성 발화 9.7% → 30% 도달 시 좌표 (0.96, 0.97)로 룰루레몬 정상 도전. "
+    "지표: 기능성 발화 점유율, 기능성 P_ratio, 재구매율."
+    "</div>",
+    unsafe_allow_html=True,
+)

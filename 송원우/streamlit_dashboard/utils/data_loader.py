@@ -27,7 +27,7 @@ import streamlit as st
 
 from config import (
     PATHS, CACHE_TTL, BRAND_ORDER, ASPECT_KEYS, SENTIMENT_LABELS,
-    MIN_REVIEWS_FOR_BRAND_SCORE,
+    MIN_REVIEWS_FOR_BRAND_SCORE, BERT_ASPECT_KR,
 )
 from utils.data_contracts import (
     REVIEWS_SCHEMA, TOPICS_SCHEMA, TOPIC_META_SCHEMA,
@@ -40,6 +40,27 @@ logger = logging.getLogger(__name__)
 
 DUMMY_SEED = 42
 DUMMY_REVIEW_N = 5_000   # 더미 모드에서 생성할 리뷰 수
+
+# SNA 공출현 그래프에서 제외할 일반 불용어
+_SNA_STOPWORDS: frozenset[str] = frozenset([
+    # 사용자 지정
+    "좋다", "같다", "구매", "많다", "생각", "제품", "맞다", "마음",
+    "하다", "있다", "없다", "너무", "진짜", "이거", "저거", "그냥",
+    "정도", "조금", "약간", "느낌", "리뷰", "상품",
+    # 기본 동사·형용사
+    "이다", "되다", "받다", "오다", "보다", "주다", "알다", "가다",
+    "좋아", "좋아요", "괜찮다", "괜찮아", "예쁘다", "이쁘다",
+    "있어", "없어", "같아", "되게", "되어", "됩니다", "합니다",
+    # 부사·감탄사
+    "정말", "엄청", "완전", "매우", "많이", "역시", "딱", "아주",
+    "좀", "더", "안", "못", "또", "다", "잘", "꽤", "참",
+    # 지시대명사·접속사
+    "그런", "이런", "저런", "어떤", "그리고", "하지만", "그러나",
+    "근데", "그래도", "그래서", "그냥요", "근데요",
+    # 의존명사·불완전 형태소
+    "것", "수", "때", "거", "게", "걸", "뭔가", "거나",
+    "이번", "이후", "기존", "사서", "주문", "배송", "포장",
+])
 
 
 # ═════════════════════════════════════════════════════════════
@@ -74,29 +95,22 @@ def get_reviews(columns: tuple[str, ...] | None = None,
 
 @st.cache_data(ttl=CACHE_TTL)
 def get_topics() -> pd.DataFrame:
-    return _load_or_dummy(PATHS["topics"], TOPICS_SCHEMA, "topics", _generate_dummy_topics)
+    return _generate_dummy_topics()
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner="토큰 데이터 로드 중...")
 def get_tokens(brand: str | None = None,
                column: str = "tokens_topic") -> pd.DataFrame:
-    """형태소 분석(사용자·불용·정규화 사전 적용) 토큰 로드.
-
-    - 워드클라우드 등 어휘 빈도 분석에 사용.
-    - PATHS["tokens"] 미존재 시 PATHS["reviews"] 의 'tokens' 컬럼으로 폴백.
-
-    Args:
-        brand: 특정 브랜드만 로드. None=전체.
-        column: 'tokens_topic'(BERTopic용 — stopword/길이 필터 강함) 또는 'tokens'.
-    """
-    path = PATHS.get("tokens", PATHS["reviews"])
-    if not path.exists():
-        path = PATHS["reviews"]
+    """reviews 마스터에서 형태소 토큰 컬럼 로드."""
+    path = PATHS["reviews"]
     if not path.exists():
         return pd.DataFrame(columns=["brand", column])
-
-    cols = ["brand", column]
-    df = pd.read_parquet(path, columns=cols)
+    try:
+        df = pd.read_parquet(path, columns=["brand", column])
+    except Exception:
+        # 컬럼 부재 시 빈 리스트 컬럼으로 대체
+        df = pd.read_parquet(path, columns=["brand"])
+        df[column] = [[] for _ in range(len(df))]
     if brand is not None:
         df = df[df["brand"] == brand]
     return df
@@ -110,9 +124,18 @@ def get_topic_meta() -> pd.DataFrame:
     if topics.empty:
         return pd.DataFrame(columns=list(TOPIC_META_SCHEMA.keys()))
 
-    # BERTopic 실 산출물은 'Topic' (대문자) 컬럼을 사용할 수 있음
-    if "topic_id" not in topics.columns and "Topic" in topics.columns:
-        topics = topics.rename(columns={"Topic": "topic_id"})
+    # BERTopic 실 산출물은 'Topic'(대문자) 또는 'topic'(소문자) 컬럼을 사용할 수 있음
+    for _old in ("Topic", "topic"):
+        if "topic_id" not in topics.columns and _old in topics.columns:
+            topics = topics.rename(columns={_old: "topic_id"})
+            break
+
+    # keyword_1~keyword_5 컬럼이 있으면 리스트로 합쳐 topic_keywords 생성
+    _kw_cols = [f"keyword_{i}" for i in range(1, 6) if f"keyword_{i}" in topics.columns]
+    if _kw_cols and "topic_keywords" not in topics.columns:
+        topics["topic_keywords"] = topics[_kw_cols].apply(
+            lambda r: [str(v).strip() for v in r if pd.notna(v) and str(v).strip()], axis=1
+        )
 
     if "topic_id" not in topics.columns:
         warn_using_dummy("토픽 메타데이터 (컬럼 누락)")
@@ -141,6 +164,10 @@ def get_topic_meta() -> pd.DataFrame:
     agg_kwargs["n_reviews"] = (id_col, "count")
     if "topic_keywords" in topics.columns:
         agg_kwargs["keywords"] = ("topic_keywords", "first")
+    elif "topic_name" in topics.columns:
+        # keyword 컬럼이 없으면 topic_name을 단어로 분해해 keywords 대체
+        topics["_kw_fallback"] = topics["topic_name"].apply(lambda n: n.split("/") if n else [])
+        agg_kwargs["keywords"] = ("_kw_fallback", "first")
 
     meta = topics.groupby("topic_id", as_index=False).agg(**agg_kwargs)
 
@@ -154,63 +181,190 @@ def get_topic_meta() -> pd.DataFrame:
     return meta
 
 
+_ABSA_COL_RENAME = {
+    "핏/사이즈":      "fit_size",
+    "소재/내구성":    "material_durability",
+    "기능성":         "functionality",
+    "디자인":         "design",
+    "브랜드/헤리티지": "brand_heritage",
+    "가격/가치":      "price_value",
+}
+
+def _load_absa_parquet(path: Path) -> pd.DataFrame:
+    df = pd.read_parquet(path)
+    rename_map = {k: v for k, v in _ABSA_COL_RENAME.items() if k in df.columns}
+    if rename_map:
+        df = df.rename(columns=rename_map)
+    return df
+
+
 @st.cache_data(ttl=CACHE_TTL)
-def get_absa() -> pd.DataFrame:
-    """ABSA 감성 분석 결과 로드.
-
-    우선순위:
-      1. 라벨러1 + 송원우 complement 둘 다 있으면 → concat + drop_duplicates("review_id")
-      2. 하나만 있으면 → 해당 파일 단독 사용
-      3. 둘 다 없으면 → 기존 absa_predictions_full.parquet 폴백
-      4. 모두 없으면 → 더미
-    """
-    path_l1   = PATHS.get("absa_labeler1")
-    path_comp = PATHS.get("absa_complement")
-    has_l1    = path_l1 is not None and path_l1.exists()
-    has_comp  = path_comp is not None and path_comp.exists()
-
-    if has_l1 and has_comp:
-        l1   = pd.read_parquet(path_l1)
-        comp = pd.read_parquet(path_comp)
-        merged = (
-            pd.concat([l1, comp], ignore_index=True)
-            .drop_duplicates("review_id")
-        )
-        result = check_schema(merged, ABSA_SCHEMA, "absa (merged)")
-        if result.missing:
-            logger.warning(result.summary())
-        logger.info(f"[ABSA] merged: l1={len(l1):,} + complement={len(comp):,} → {len(merged):,}")
-        return merged
-
-    if has_l1:
-        return _load_or_dummy(path_l1, ABSA_SCHEMA, "absa (labeler1)", _generate_dummy_absa)
-
-    if has_comp:
-        return _load_or_dummy(path_comp, ABSA_SCHEMA, "absa (complement)", _generate_dummy_absa)
-
-    # 기존 단일 파일 폴백 (하위 호환)
-    return _load_or_dummy(PATHS["absa"], ABSA_SCHEMA, "absa", _generate_dummy_absa)
+def get_absa(sample_mode: str = "all") -> pd.DataFrame:
+    """ABSA phase_e 최종 결과 로드 (4브랜드 × 3,014건)."""
+    path = PATHS["absa"]
+    if path.exists():
+        df = _load_absa_parquet(path)
+        # confidence 컬럼 누락 시 NaN으로 동적 보완 (스키마 경고 없이 로드 보장)
+        for aspect in ASPECT_KEYS:
+            conf_col = f"{aspect}_confidence"
+            if conf_col not in df.columns:
+                df[conf_col] = np.nan
+        logger.info(f"[ABSA] phase_e 로드: {len(df):,}")
+        return df
+    logger.info("[DUMMY] absa 파일 미발견 → 더미 생성")
+    return _generate_dummy_absa()
 
 
 @st.cache_data(ttl=CACHE_TTL)
 def get_positioning() -> pd.DataFrame:
-    """브랜드 단위 포지셔닝. 실파일 없으면 ABSA에서 즉시 계산."""
-    path = PATHS["positioning"]
-    if path.exists():
-        df = pd.read_parquet(path)
-        result = check_schema(df, POSITIONING_SCHEMA, "positioning")
-        if result.missing:
-            logger.warning(result.summary())
-            warn_using_dummy(f"포지셔닝 좌표 (스키마 불일치 — 누락 컬럼: {result.missing})")
-            return compute_positioning_from_absa()
-        return df
-    # 폴백: absa + reviews 조합으로 즉시 산출
+    """ABSA → 브랜드 포지셔닝 좌표 동적 산출."""
     return compute_positioning_from_absa()
 
 
+@st.cache_data(ttl=CACHE_TTL, show_spinner="SNA 연산 중...")
+def get_sna(top_n_words: int = 150) -> pd.DataFrame:
+    """reviews 형태소 토큰 → NetworkX 공출현 그래프 → 연결/매개 중심성 산출.
+
+    top_n_words: 브랜드별 고빈도 상위 N개 단어만 그래프에 포함 (연산 부하 제한).
+    반환 컬럼: keyword, brand, centrality(연결), betweenness_centrality(매개), frequency, polarity, topic_id
+    """
+    import networkx as nx
+    from itertools import combinations
+
+    token_col = "tokens_topic"
+    df = get_reviews(columns=("brand", token_col))
+    if df.empty or token_col not in df.columns:
+        token_col = "tokens"
+        df = get_reviews(columns=("brand", token_col))
+    if df.empty or token_col not in df.columns:
+        return _generate_dummy_sna()
+
+    rows = []
+    for brand, sub in df.groupby("brand", observed=True):
+        # Pass 1: 단어 빈도 집계 (불용어 제외)
+        word_freq: dict[str, int] = {}
+        for toks in sub[token_col]:
+            if not isinstance(toks, (list, np.ndarray)):
+                continue
+            for w in toks:
+                if (isinstance(w, str) and len(w) >= 2
+                        and w not in _SNA_STOPWORDS):
+                    word_freq[w] = word_freq.get(w, 0) + 1
+
+        if not word_freq:
+            continue
+
+        top_words = set(sorted(word_freq, key=lambda x: -word_freq[x])[:top_n_words])
+
+        # Pass 2: 공출현 그래프 구축
+        G: nx.Graph = nx.Graph()
+        for node in top_words:
+            G.add_node(node)
+
+        for toks in sub[token_col]:
+            if not isinstance(toks, (list, np.ndarray)):
+                continue
+            words_in_review = list({w for w in toks if isinstance(w, str) and w in top_words})
+            for w1, w2 in combinations(words_in_review, 2):
+                if G.has_edge(w1, w2):
+                    G[w1][w2]["weight"] += 1
+                else:
+                    G.add_edge(w1, w2, weight=1)
+
+        if G.number_of_nodes() == 0:
+            continue
+
+        degree = nx.degree_centrality(G)
+        betweenness = nx.betweenness_centrality(G, weight="weight", normalized=True)
+
+        for word in G.nodes():
+            rows.append({
+                "keyword":                word,
+                "brand":                  brand,
+                "centrality":             round(degree.get(word, 0.0), 4),
+                "betweenness_centrality": round(betweenness.get(word, 0.0), 4),
+                "frequency":              word_freq.get(word, 0),
+                "polarity":               0.0,
+                "topic_id":               -1,
+            })
+
+    if not rows:
+        return _generate_dummy_sna()
+
+    return pd.DataFrame(rows)
+
+
+# ═════════════════════════════════════════════════════════════
+# BERTopic 신규 산출물 로더 (2026-05-10 도착)
+# ═════════════════════════════════════════════════════════════
+_BERT_SCOPE_PATHS = {
+    "all":  "bert_110m",   # 전체 1.11M건
+    "22m":  "bert_22m",    # 균형 213,972건
+    "low":  "bert_low",    # 저평점 9,448건
+}
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner="BERTopic 데이터 로드 중...")
+def get_dashboard_reviews(scope: str = "22m") -> pd.DataFrame:
+    """3_BERTopic.py 전용 — 새 dashboard_reviews_*.parquet 로더.
+
+    Args:
+        scope:
+            "22m" — 균형 샘플 213,972건 (기본, 빠른 로드)
+            "all" — 전체 1.11M건
+            "low" — 저평점 9,448건 (별도 topic_low/topic_name_low/aspect_low 컬럼)
+
+    Returns: brand, rating, topic, topic_name, aspect, aspect_label, content
+        - aspect_label: BERT_ASPECT_KR 매핑 후 한글 표시명 (예: 핏/사이즈)
+        - low scope는 컬럼명을 topic/topic_name/aspect로 통일하여 반환
+        ※ review_id 부재 — ABSA join 불가, 페이지 단독 분석용
+    """
+    key = _BERT_SCOPE_PATHS.get(scope, "bert_22m")
+    path = PATHS.get(key)
+    if path is None or not path.exists():
+        logger.info(f"[BERTopic] {key} 미존재 → 빈 DF 반환")
+        return pd.DataFrame()
+    df = pd.read_parquet(path)
+    if scope == "low":
+        # 컬럼명 통일 — topic_low → topic, topic_name_low → topic_name, aspect_low → aspect
+        df = df.rename(columns={
+            "topic_low": "topic",
+            "topic_name_low": "topic_name",
+            "aspect_low": "aspect",
+        })
+
+    # aspect 한글 매핑 — topic_name 대괄호 텍스트 폴백
+    if "aspect" in df.columns:
+        df["aspect_label"] = df["aspect"].map(BERT_ASPECT_KR)
+    else:
+        df["aspect_label"] = None
+    _bracket = df["topic_name"].astype(str).str.extract(r"\[([^\]]+)\]")[0]
+    df["aspect_label"] = df["aspect_label"].fillna(_bracket).fillna("기타")
+    return df
+
+
 @st.cache_data(ttl=CACHE_TTL)
-def get_sna() -> pd.DataFrame:
-    return _load_or_dummy(PATHS["sna"], SNA_SCHEMA, "sna", _generate_dummy_sna)
+def get_topic_dictionary(scope: str = "all") -> pd.DataFrame:
+    """topic_aspect_mapping.parquet 로더 (49토픽 / 저평점 30토픽).
+
+    Returns 원본 컬럼 + aspect_label(한글), keywords_top5(topic_keywords의 첫 5개).
+    파일 부재 시 빈 DF.
+    """
+    key = "topic_map_low" if scope == "low" else "topic_map"
+    path = PATHS.get(key)
+    if path is None or not path.exists():
+        return pd.DataFrame()
+    td = pd.read_parquet(path)
+    if "aspect" in td.columns:
+        td["aspect_label"] = td["aspect"].map(BERT_ASPECT_KR).fillna(td["aspect"])
+    if "topic_keywords" in td.columns and "keywords_top5" not in td.columns:
+        def _top5(s):
+            if not isinstance(s, str):
+                return ""
+            parts = [p.strip() for p in s.split(",") if p.strip()]
+            return ", ".join(parts[:5])
+        td["keywords_top5"] = td["topic_keywords"].apply(_top5)
+    return td
 
 
 # ═════════════════════════════════════════════════════════════
@@ -239,17 +393,21 @@ def compute_brand_kpis(filters_hash: str = "") -> pd.DataFrame:
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def compute_aspect_polarity(filters_hash: str = "") -> pd.DataFrame:
+def compute_aspect_polarity(filters_hash: str = "", sample_mode: str = "all") -> pd.DataFrame:
     """브랜드 × 6속성 P/N/X 비율 — ABSA 페이지용.
+
+    Args:
+        sample_mode: "all"=비대칭 전체(20K+3K×3), "balanced"=phase_e 균형(각 3,014)
 
     Returns: long-format [brand, aspect, P_ratio, N_ratio, X_ratio, n_reviews]
     """
     reviews = get_reviews(columns=("review_id", "brand"))
-    absa    = get_absa()
+    absa    = get_absa(sample_mode=sample_mode)
     if absa.empty or reviews.empty:
         return pd.DataFrame()
 
-    df = reviews.merge(absa, on="review_id", how="inner")
+    absa_clean = absa.drop(columns=[c for c in absa.columns if c in reviews.columns and c != "review_id"])
+    df = reviews.merge(absa_clean, on="review_id", how="inner")
     rows = []
     for brand, sub in df.groupby("brand", observed=True):
         n = len(sub)
